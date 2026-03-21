@@ -18,8 +18,8 @@ TEST_NAME=""
 # ── PKI project root ──────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(dirname "$SCRIPT_DIR")"
-PKI_CMD="python3.10 $PKI_ROOT/cli.py"
-PKI_PY="python3.10 -c"
+PKI_CMD="$PYTHON $PKI_ROOT/cli.py"
+PKI_PY="$PYTHON -c"
 
 # ── Assertion helpers ─────────────────────────────────────────────────────────
 
@@ -105,7 +105,7 @@ assert_python_ok() {
     local desc="$1"
     local script="$2"
     local output
-    output=$(cd "$PKI_ROOT" && python3.10 -c "$script" 2>&1)
+    output=$(cd "$PKI_ROOT" && $PYTHON -c "$script" 2>&1)
     if [[ $? -eq 0 ]]; then
         pass "$desc"
     else

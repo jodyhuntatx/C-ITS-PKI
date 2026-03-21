@@ -7,6 +7,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKI_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Install dependencies in venvj
+uv sync
+
+# Always run python in uv managed venv
+export PYTHON="uv run python"
+
 # Colour codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -25,12 +31,12 @@ echo ""
 echo -e "${BOLD}Pre-flight checks${NC}"
 
 # Python version
-PYTHON_VERSION=$(python3.10 --version 2>&1)
+PYTHON_VERSION=$($PYTHON --version 2>&1)
 echo "  Python   : $PYTHON_VERSION"
 
 # Check required packages
-if python3.10 -c "import cryptography" 2>/dev/null; then
-    CRYPTO_VERSION=$(python3.10 -c "import cryptography; print(cryptography.__version__)")
+if $PYTHON -c "import cryptography" 2>/dev/null; then
+    CRYPTO_VERSION=$($PYTHON -c "import cryptography; print(cryptography.__version__)")
     echo -e "  cryptography : ${GREEN}$CRYPTO_VERSION${NC}"
 else
     echo -e "  cryptography : ${RED}NOT INSTALLED${NC}"
@@ -40,7 +46,7 @@ else
 fi
 
 # Check src package is importable
-if python3.10 -c "import sys; sys.path.insert(0,'$PKI_ROOT'); import src" 2>/dev/null; then
+if $PYTHON -c "import sys; sys.path.insert(0,'$PKI_ROOT'); import src" 2>/dev/null; then
     echo -e "  src package  : ${GREEN}OK${NC}"
 else
     echo -e "  src package  : ${RED}NOT FOUND${NC} (run from $PKI_ROOT)"

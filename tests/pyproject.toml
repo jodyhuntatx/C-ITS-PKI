@@ -1,14 +1,9 @@
 [project]
-name = "c-its-pki"
+name = "tests"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "cryptography>=46.0.5",
-]
-
-[tool.uv.workspace]
-members = [
-    "tests",
 ]
