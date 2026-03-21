@@ -1,5 +1,6 @@
 #!/bin/bash
 echo "Size before: $(du -sh | cut -f1)"
+rm ./cam.* ./denm.*
 rm -rf pki-output
 rm -rf src/__pycache__/
 rm -rf .venv

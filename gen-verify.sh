@@ -10,8 +10,13 @@ PKI_PY="$PYTHON -c"
 $PKI_CMD init --output pki-output --algo p256 --region 65535
 
 main() {
-  enroll_its_station
+  uv sync
+#  enroll_its_station
   issue_auth_ticket
+  sign_a_cam
+  sign_a_denm
+  encrypt_a_message
+  decrypt_a_message
 }
 
 #===================================
@@ -30,10 +35,68 @@ issue_auth_ticket() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Issue an Authorization Ticket"
+  rm -rf pki-output/tickets/at_*
   $PKI_CMD issue-at --output pki-output --psid 36,37 --validity 168
-  $PKI_CMD info --cert pki-output/tickets/at_1774065363.cert
-#  $PKI_CMD verify-cert --cert pki-output/tickets/at_1774065363_sign.key \
-#			--issuer pki-output/root_ca.cert
+  AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
+  $PKI_CMD info --cert $AUTH_TICKET
+#  SIGN_KEY=$(ls ./pki-output/tickets/*.key)
+#  $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY
+}
+
+
+#===================================
+sign_a_cam() {
+  echo; echo; echo; echo; 
+  echo "######################"
+  echo "Sign a CAM"
+  echo -n "CAM_PAYLOAD" > cam.bin
+  AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
+  SIGN_KEY=$(ls ./pki-output/tickets/*.key)
+  $PKI_CMD sign-cam \
+    --at-key $SIGN_KEY \
+    --at-cert $AUTH_TICKET \
+    --payload cam.bin \
+    --output cam.signed
+}
+
+#===================================
+sign_a_denm() {
+  echo; echo; echo; echo; 
+  echo "######################"
+  echo "Sign a DENM"
+  echo -n "DENM_PAYLOAD" > denm.bin
+  AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
+  SIGN_KEY=$(ls ./pki-output/tickets/*.key)
+  $PKI_CMD sign-denm \
+    --at-key $SIGN_KEY \
+    --at-cert $AUTH_TICKET \
+    --payload denm.bin \
+    --lat 52.5200 --lon 13.4050 \
+    --output denm.signed
+}
+
+#===================================
+encrypt_a_message() {
+  echo; echo; echo; echo; 
+  echo "######################"
+  echo "Encrypt a message (for the EA)"
+  $PKI_CMD encrypt \
+    --enc-cert pki-output/ea.cert \
+    --enc-key pki-output/ea_enc.key \
+    --payload cam.signed \
+    --output cam.enc
+}
+
+#===================================
+decrypt_a_message() {
+  echo; echo; echo; echo; 
+  echo "######################"
+  echo "Decrypt a message"
+  $PKI_CMD decrypt \
+    --enc-cert pki-output/ea.cert \
+    --enc-key pki-output/ea_enc.key \
+    --input cam.enc \
+    --output cam.decrypted
 }
 
 main "$@"
