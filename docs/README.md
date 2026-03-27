@@ -98,6 +98,55 @@ python cli.py sign-denm \
     --payload denm.bin \
     --lat 52.5200 --lon 13.4050 \
     --output denm.signed
+
+```
+
+### 6.5 Verify a CAM
+Message signature only (fast, no chain):
+```bash
+python cli.py verify-cam \
+  --signed  cam.signed \
+  --at-cert pki-output/tickets/at_<ts>.cert
+```
+Full end-to-end verification (message + chain back to root):
+```bash
+python cli.py verify-cam \
+  --signed  cam.signed \
+  --at-cert pki-output/tickets/at_<ts>.cert \
+  --aa      pki-output/aa.cert \
+  --root    pki-output/root_ca.cert
+```
+
+**Example output:**
+```
+[Signed CAM]
+  File         : cam.signed (87 bytes)
+  AT cert      : pki-output/tickets/at_1234567890.cert
+
+[Message Signature]
+  [PASS] ECDSA signature over ToBeSignedData
+         PSID            : CAM (36)
+         GenerationTime  : 2025-06-01T14:23:11.123456Z
+         Signer          : digest (digest=a3f1bc9d00e7421c)
+         Payload         : 11 bytes
+
+[Certificate Chain]
+  AA cert      : pki-output/aa.cert
+  Root CA cert : pki-output/root_ca.cert
+  [PASS] Root CA self-signature
+  [PASS] Root CA validity period
+  [PASS] AA signature (by Root CA)
+  [PASS] AA validity period
+  [PASS] AA issuer digest
+  [PASS] AT signature (by AA)
+  [PASS] AT validity period
+  [PASS] AT issuer digest
+  [PASS] cracaId / crlSeries
+  [PASS] AT appPermissions present
+  [PASS] AT profile constraints
+
+[Overall]
+  VALID
 ```
 
 ### 7. Encrypt a message (for the EA)

@@ -7,16 +7,39 @@ PKI_ROOT="$(pwd)"
 PKI_CMD="$PYTHON $PKI_ROOT/cli.py"
 PKI_PY="$PYTHON -c"
 
-$PKI_CMD init --output pki-output --algo p256 --region 65535
 
 main() {
-  uv sync
-#  enroll_its_station
+  init_pki
+  enroll_its_station
   issue_auth_ticket
   sign_a_cam
   sign_a_denm
   encrypt_a_message
   decrypt_a_message
+}
+
+#===================================
+init_pki() {
+  uv sync
+  $PKI_CMD init --output pki-output --algo p256 --region 65535
+  echo; echo; echo "######################"
+  echo "Root cert:"
+  echo "######################"
+  $PKI_CMD info --cert pki-output/root_ca.cert
+  echo; echo; echo "######################"
+  echo "Enrollment Authority cert:"
+  echo "######################"
+  $PKI_CMD info --cert pki-output/ea.cert
+  echo "Verifying signed by root cert..."
+  $PKI_CMD verify-cert --cert pki-output/ea.cert \
+			                 --issuer pki-output/root_ca.cert
+  echo; echo; echo "######################"
+  echo "Authorization Authority:"
+  echo "######################"
+  $PKI_CMD info --cert pki-output/aa.cert
+  echo "Verifying signed by root cert..."
+  $PKI_CMD verify-cert --cert pki-output/aa.cert \
+			                 --issuer pki-output/root_ca.cert
 }
 
 #===================================
@@ -27,7 +50,7 @@ enroll_its_station() {
   $PKI_CMD enrol --output pki-output --name "ITS-Station-001"
   $PKI_CMD info --cert pki-output/its-stations/ITS-Station-001/ec.cert
   $PKI_CMD verify-cert --cert pki-output/its-stations/ITS-Station-001/ec.cert \
-			--issuer pki-output/root_ca.cert
+			                 --issuer pki-output/ea.cert
 }
 
 #===================================
@@ -39,8 +62,9 @@ issue_auth_ticket() {
   $PKI_CMD issue-at --output pki-output --psid 36,37 --validity 168
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
   $PKI_CMD info --cert $AUTH_TICKET
-#  SIGN_KEY=$(ls ./pki-output/tickets/*.key)
-#  $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY
+  echo "Verifying signed by AA cert..."
+  SIGN_KEY=$(ls ./pki-output/aa.cert)
+  $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY
 }
 
 
@@ -57,6 +81,16 @@ sign_a_cam() {
     --at-cert $AUTH_TICKET \
     --payload cam.bin \
     --output cam.signed
+  echo; echo "Verify CAM signature (fast):"
+  $PKI_CMD verify-cam \
+  --signed  cam.signed \
+  --at-cert $AUTH_TICKET
+  echo; echo "Verify CAM signature (full chain):"
+  $PKI_CMD verify-cam \
+  --signed  cam.signed \
+  --at-cert $AUTH_TICKET \
+  --aa      pki-output/aa.cert \
+  --root    pki-output/root_ca.cert
 }
 
 #===================================
@@ -97,6 +131,11 @@ decrypt_a_message() {
     --enc-key pki-output/ea_enc.key \
     --input cam.enc \
     --output cam.decrypted
+  echo; echo "Verify decrypted CAM signature (fast):"
+  AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
+  $PKI_CMD verify-cam \
+  --signed  cam.decrypted \
+  --at-cert $AUTH_TICKET
 }
 
 main "$@"
