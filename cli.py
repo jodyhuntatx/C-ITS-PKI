@@ -72,8 +72,8 @@ def main():
     p_denm.add_argument('--elev', default='0', help='Elevation in metres')
     p_denm.add_argument('--output', '-o')
 
-    # verify-cam
-    p_vcam = sub.add_parser('verify-cam', help='Verify a signed CAM file')
+    # verify-sig
+    p_vcam = sub.add_parser('verify-sig', help='Verify a signed CAM file')
     p_vcam.add_argument('--signed', required=True,
                         help='Signed CAM file (EtsiTs103097Data-Signed, COER)')
     p_vcam.add_argument('--at-cert', required=True,
@@ -115,7 +115,7 @@ def main():
         'issue-at': cmd_issue_at,
         'sign-cam': cmd_sign_cam,
         'sign-denm': cmd_sign_denm,
-        'verify-cam': cmd_verify_cam,
+        'verify-sig': cmd_verify_sig,
         'encrypt': cmd_encrypt,
         'decrypt': cmd_decrypt,
         'verify-cert': cmd_verify_cert,
@@ -311,7 +311,7 @@ def cmd_sign_denm(args):
     out_path.write_bytes(signed)
     print(f"[OK] DENM signed → {out_path} ({len(signed)} bytes)")
 
-def cmd_verify_cam(args):
+def cmd_verify_sig(args):
     """
     Verify a signed CAM file.
 

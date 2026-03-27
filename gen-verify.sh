@@ -82,11 +82,11 @@ sign_a_cam() {
     --payload cam.bin \
     --output cam.signed
   echo; echo "Verify CAM signature (fast):"
-  $PKI_CMD verify-cam \
+  $PKI_CMD verify-sig \
   --signed  cam.signed \
   --at-cert $AUTH_TICKET
   echo; echo "Verify CAM signature (full chain):"
-  $PKI_CMD verify-cam \
+  $PKI_CMD verify-sig \
   --signed  cam.signed \
   --at-cert $AUTH_TICKET \
   --aa      pki-output/aa.cert \
@@ -133,7 +133,7 @@ decrypt_a_message() {
     --output cam.decrypted
   echo; echo "Verify decrypted CAM signature (fast):"
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
-  $PKI_CMD verify-cam \
+  $PKI_CMD verify-sig \
   --signed  cam.decrypted \
   --at-cert $AUTH_TICKET
 }

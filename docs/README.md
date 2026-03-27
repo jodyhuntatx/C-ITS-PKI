@@ -101,22 +101,6 @@ python cli.py sign-denm \
 
 ```
 
-### 6.5 Verify a CAM
-Message signature only (fast, no chain):
-```bash
-python cli.py verify-cam \
-  --signed  cam.signed \
-  --at-cert pki-output/tickets/at_<ts>.cert
-```
-Full end-to-end verification (message + chain back to root):
-```bash
-python cli.py verify-cam \
-  --signed  cam.signed \
-  --at-cert pki-output/tickets/at_<ts>.cert \
-  --aa      pki-output/aa.cert \
-  --root    pki-output/root_ca.cert
-```
-
 ### 7. Encrypt a message (for the EA)
 
 ```bash
@@ -142,6 +126,22 @@ python cli.py decrypt \
 ```bash
 python cli.py info --cert pki-output/root_ca.cert
 python cli.py verify-cert --cert pki-output/ea.cert --issuer pki-output/root_ca.cert
+```
+
+### 10. Verify a signature
+Message signature only (fast, no chain):
+```bash
+python cli.py verify-sig \
+  --signed  cam.signed \
+  --at-cert pki-output/tickets/at_<ts>.cert
+```
+Full end-to-end verification (message + chain back to root):
+```bash
+python cli.py verify-sig \
+  --signed  cam.signed \
+  --at-cert pki-output/tickets/at_<ts>.cert \
+  --aa      pki-output/aa.cert \
+  --root    pki-output/root_ca.cert
 ```
 
 ---
@@ -319,6 +319,31 @@ C-ITS-PKI/
 └── requirements.txt      Python dependencies
 ```
 
+---
+
+### Opportunities for Enhancement
+
+V2X (Vehicle-to-Everything) communication includes several message types beyond CAM (Cooperative Awareness Message) and DENM (Decentralized Environmental Notification Message).
+
+**ETSI/European Standards**
+
+- MAPEM (MAP Extended Message) — transmits intersection topology and lane geometry
+- SPATEM (Signal Phase and Timing Extended Message) — conveys traffic light phase and timing info
+- IVIM (Infrastructure to Vehicle Information Message) — delivers road signs and in-vehicle signage data
+- SREM (Signal Request Extended Message) — allows vehicles (e.g., emergency or transit) to request signal priority
+- SSEM (Signal Status Extended Message) — response from infrastructure to signal requests
+- CPM (Collective Perception Message) — shares perceived objects (pedestrians, cyclists, other vehicles) detected by sensors
+- VAM (Vulnerable Road User Awareness Message) — broadcast by VRUs like cyclists and pedestrians
+- MCM (Maneuver Coordination Message) — used for negotiating cooperative maneuvers between vehicles
+- IMZM (Interference Management Zone Message) — marks areas where radio interference may occur
+
+**Other / Specialized**
+
+- GeoNetworking messages — underlying transport layer messages specific to ETSI ITS
+- SAM (Service Announcement Message) — advertises available V2X services in an area
+- RTCM (Real-Time Correction Message) — delivers GNSS correction data for high-precision positioning
+
+The landscape is still evolving, with CPM and MCM being relatively newer additions aimed at supporting higher levels of automation and cooperative driving.
 ---
 
 ## License
