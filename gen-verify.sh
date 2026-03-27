@@ -72,7 +72,7 @@ issue_auth_ticket() {
 sign_a_cam() {
   echo; echo; echo; echo; 
   echo "######################"
-  echo "Sign a CAM"
+  echo "Sign & verify a CAM"
   echo -n "CAM_PAYLOAD" > cam.bin
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
   SIGN_KEY=$(ls ./pki-output/tickets/*.key)
@@ -81,11 +81,13 @@ sign_a_cam() {
     --at-cert $AUTH_TICKET \
     --payload cam.bin \
     --output cam.signed
-  echo; echo "Verify CAM signature (fast):"
+  echo; echo "-------------------------------"
+  echo "Verify CAM signature (fast):"
   $PKI_CMD verify-sig \
   --signed  cam.signed \
   --at-cert $AUTH_TICKET
-  echo; echo "Verify CAM signature (full chain):"
+  echo; echo "-------------------------------"
+  echo "Verify CAM signature (full chain):"
   $PKI_CMD verify-sig \
   --signed  cam.signed \
   --at-cert $AUTH_TICKET \
@@ -97,7 +99,7 @@ sign_a_cam() {
 sign_a_denm() {
   echo; echo; echo; echo; 
   echo "######################"
-  echo "Sign a DENM"
+  echo "Sign & verify a DENM"
   echo -n "DENM_PAYLOAD" > denm.bin
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
   SIGN_KEY=$(ls ./pki-output/tickets/*.key)
@@ -107,6 +109,18 @@ sign_a_denm() {
     --payload denm.bin \
     --lat 52.5200 --lon 13.4050 \
     --output denm.signed
+  echo; echo "-------------------------------"
+  echo "Verify DENM signature (fast):"
+  $PKI_CMD verify-sig \
+  --signed  denm.signed \
+  --at-cert $AUTH_TICKET
+  echo; echo "-------------------------------"
+  echo "Verify DENM signature (full chain):"
+  $PKI_CMD verify-sig \
+  --signed  denm.signed \
+  --at-cert $AUTH_TICKET \
+  --aa      pki-output/aa.cert \
+  --root    pki-output/root_ca.cert
 }
 
 #===================================
@@ -125,13 +139,14 @@ encrypt_a_message() {
 decrypt_a_message() {
   echo; echo; echo; echo; 
   echo "######################"
-  echo "Decrypt a message"
+  echo "Decrypt & verify a message"
   $PKI_CMD decrypt \
     --enc-cert pki-output/ea.cert \
     --enc-key pki-output/ea_enc.key \
     --input cam.enc \
     --output cam.decrypted
-  echo; echo "Verify decrypted CAM signature (fast):"
+  echo; echo "-------------------------------"
+  echo "Verify decrypted CAM signature (fast):"
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
   $PKI_CMD verify-sig \
   --signed  cam.decrypted \
