@@ -6,12 +6,14 @@ A Python implementation of a complete C-ITS Public Key Infrastructure conforming
 
 - **ETSI TS 103 097 V2.2.1** — ITS Security header and certificate formats (Release 2)
 - **IEEE Std 1609.2™-2025** — Wireless Access in Vehicular Environments (WAVE) Security
+- **IEEE 1609.2a** — Butterfly Key Expansion for Authorization Tickets
 - **ITU-T X.696** — Canonical Octet Encoding Rules (COER)
 
 ---
+
 ## Background Reading
 
- - [All You Need to Know About V2X PKI Certificates: Butterfly Key Expansion and Implicit Certificates](https://autocrypt.io/v2x-pki-certificates-butterfly-key-expansion-implicit-certificates/)
+- [All You Need to Know About V2X PKI Certificates: Butterfly Key Expansion and Implicit Certificates](https://autocrypt.io/v2x-pki-certificates-butterfly-key-expansion-implicit-certificates/)
 
 ---
 
@@ -26,13 +28,15 @@ A Python implementation of a complete C-ITS Public Key Infrastructure conforming
 | TLM self-signed certificate | ETSI TS 103 097 V2.2.1 §7.2.4 |
 | Enrolment Credential (EC) issuance | ETSI TS 103 097 V2.2.1 §7.2.5 |
 | Authorization Ticket (AT) issuance | ETSI TS 103 097 V2.2.1 §7.2.6 |
+| Butterfly Key Expansion (BKE) batch AT issuance | IEEE 1609.2a §6.4.3.7 / ETSI TS 102 941 §6.2.3.3.1 |
 | COER encoding/decoding | ITU-T X.696 |
 | EtsiTs103097Data-Signed (CAM/DENM) | ETSI TS 103 097 V2.2.1 §5.2 |
 | EtsiTs103097Data-Encrypted | ETSI TS 103 097 V2.2.1 §5.3 |
 | ECIES key encapsulation | IEEE 1609.2 §5.3.5 |
 | AES-128-CCM symmetric encryption | IEEE 1609.2 §5.3.8 |
 | Certificate chain verification | IEEE 1609.2 §5.1 |
-| Hash ID-based revocation | ETSI TS 102 941 |
+| AT profile validation (id=none, no certIssuePermissions) | ETSI TS 103 097 V2.2.1 §7.2.6 |
+| Hash ID-based revocation check | ETSI TS 102 941 |
 
 ---
 
@@ -43,6 +47,8 @@ A Python implementation of a complete C-ITS Public Key Infrastructure conforming
 ```bash
 pip install -r requirements.txt
 ```
+
+Dependencies: `cryptography`, `tinyec>=0.4.0`
 
 ### 2. Initialise the PKI hierarchy
 
@@ -56,13 +62,14 @@ pki-output/
 ├── root_ca.cert         # Root CA (self-signed, COER)
 ├── root_ca_sign.key     # Root CA signing key (PEM)
 ├── tlm.cert             # Trust List Manager certificate
+├── tlm_sign.key         # TLM signing key
 ├── ea.cert              # Enrolment Authority certificate
 ├── ea_sign.key          # EA signing key
 ├── ea_enc.key           # EA encryption key
 ├── aa.cert              # Authorization Authority certificate
 ├── aa_sign.key          # AA signing key
 ├── aa_enc.key           # AA encryption key
-└── pki_meta.json        # PKI metadata
+└── pki_meta.json        # PKI metadata (algorithm, region, entity list)
 ```
 
 ### 3. Enrol an ITS-Station
@@ -71,37 +78,69 @@ pki-output/
 python cli.py enrol --output pki-output --name "ITS-Station-001"
 ```
 
+Output in `pki-output/its-stations/ITS-Station-001/`:
+- `ec.cert` — Enrolment Credential (COER)
+- `ec_sign.key` — EC signing private key (PEM)
+
 ### 4. Issue an Authorization Ticket
 
 ```bash
 python cli.py issue-at --output pki-output --psid 36,37 --validity 168
 ```
 
-### 5. Sign a CAM
+Output in `pki-output/tickets/`:
+- `at_<ts>.cert` — Authorization Ticket (COER, pseudonymous)
+- `at_<ts>_sign.key` — AT signing private key (PEM)
+
+### 5. Issue a BKE batch of Authorization Tickets
+
+```bash
+python cli.py butterfly-at --output pki-output --count 8 --validity 168
+```
+
+Output in `pki-output/bke-tickets/<ts>/`:
+- `caterpillar_sign.key` — Caterpillar private key (keep secret, one per batch)
+- `bke_at_N.cert` — AT certificate N (COER, pseudonymous)
+- `bke_at_N_sign.key` — AT N signing private key (derived from caterpillar key)
+- `bke_at_N.expansion` — Expansion value eᵢ used to derive AT N
+
+The AA derives each AT public key as `Sᵢ = Cf + H(Cf‖eᵢ)·G` without ever
+seeing the corresponding private key. The vehicle recovers each AT private key
+locally as `sᵢ = (f + H(Cf‖eᵢ)) mod n`.
+
+### 6. Sign a CAM
 
 ```bash
 echo -n "CAM_PAYLOAD" > cam.bin
 python cli.py sign-cam \
-    --at-key pki-output/tickets/at_*.key \
-    --at-cert pki-output/tickets/at_*.cert \
+    --at-key pki-output/tickets/at_<ts>_sign.key \
+    --at-cert pki-output/tickets/at_<ts>.cert \
     --payload cam.bin \
     --output cam.signed
 ```
 
-### 6. Sign a DENM
+BKE ATs are drop-in replacements — the signing interface is identical:
+
+```bash
+python cli.py sign-cam \
+    --at-key pki-output/bke-tickets/<ts>/bke_at_0_sign.key \
+    --at-cert pki-output/bke-tickets/<ts>/bke_at_0.cert \
+    --payload cam.bin
+```
+
+### 7. Sign a DENM
 
 ```bash
 echo -n "DENM_PAYLOAD" > denm.bin
 python cli.py sign-denm \
-    --at-key pki-output/tickets/at_*.key \
-    --at-cert pki-output/tickets/at_*.cert \
+    --at-key pki-output/tickets/at_<ts>_sign.key \
+    --at-cert pki-output/tickets/at_<ts>.cert \
     --payload denm.bin \
     --lat 52.5200 --lon 13.4050 \
     --output denm.signed
-
 ```
 
-### 7. Encrypt a message (for the EA)
+### 8. Encrypt a message
 
 ```bash
 python cli.py encrypt \
@@ -111,7 +150,7 @@ python cli.py encrypt \
     --output cam.enc
 ```
 
-### 8. Decrypt a message
+### 9. Decrypt a message
 
 ```bash
 python cli.py decrypt \
@@ -121,27 +160,41 @@ python cli.py decrypt \
     --output cam.decrypted
 ```
 
-### 9. Inspect a certificate
+### 10. Inspect a certificate
 
 ```bash
 python cli.py info --cert pki-output/root_ca.cert
-python cli.py verify-cert --cert pki-output/ea.cert --issuer pki-output/root_ca.cert
+python cli.py info --cert pki-output/bke-tickets/<ts>/bke_at_0.cert
 ```
 
-### 10. Verify a signature
+### 11. Verify a certificate
+
+```bash
+# Verify any certificate (signature, validity, cracaId, permissions, region)
+python cli.py verify-cert --cert pki-output/ea.cert --issuer pki-output/root_ca.cert
+
+# Verify an AT or BKE AT — also runs AT profile checks (id=none, no certIssuePermissions)
+python cli.py verify-cert \
+    --cert pki-output/tickets/at_<ts>.cert \
+    --issuer pki-output/aa.cert
+```
+
+### 12. Verify a signed message
+
 Message signature only (fast, no chain):
 ```bash
 python cli.py verify-sig \
-  --signed  cam.signed \
-  --at-cert pki-output/tickets/at_<ts>.cert
+    --signed cam.signed \
+    --at-cert pki-output/tickets/at_<ts>.cert
 ```
-Full end-to-end verification (message + chain back to root):
+
+Full end-to-end verification (message + certificate chain back to root):
 ```bash
 python cli.py verify-sig \
-  --signed  cam.signed \
-  --at-cert pki-output/tickets/at_<ts>.cert \
-  --aa      pki-output/aa.cert \
-  --root    pki-output/root_ca.cert
+    --signed cam.signed \
+    --at-cert pki-output/tickets/at_<ts>.cert \
+    --aa pki-output/aa.cert \
+    --root pki-output/root_ca.cert
 ```
 
 ---
@@ -154,29 +207,39 @@ python cli.py verify-sig \
 from src.pki import CITSPKI
 from src.types import PublicKeyAlgorithm
 
-# Create and initialise PKI (P-256, EU-27 region)
 pki = CITSPKI(
     algorithm=PublicKeyAlgorithm.ECDSA_NIST_P256,
     region_ids=[65535]   # EU-27
 )
 certs = pki.initialise()
-
-# Save to disk
 pki.save("pki-output")
 ```
 
 ### Issue certificates
 
 ```python
-# Enrol an ITS-Station → get Enrolment Credential
-result = pki.enrol_its_station("ITS-Station-001")
-ec_cert_bytes = result['ec']           # COER-encoded EC
-ec_priv_key   = result['sign_priv_key']
+# Enrol an ITS-Station → Enrolment Credential
+ec_result = pki.enrol_its_station("ITS-Station-001")
+ec_cert_bytes = ec_result['ec']
+ec_priv_key   = ec_result['sign_priv_key']
 
-# Issue an Authorization Ticket
+# Issue a standard Authorization Ticket
 at_result = pki.issue_authorization_ticket()
-at_cert_bytes = at_result['at']        # COER-encoded AT
+at_cert_bytes = at_result['at']
 at_priv_key   = at_result['sign_priv_key']
+
+# Issue a BKE batch of Authorization Tickets
+from src.crypto import generate_keypair, random_bytes
+cat_priv, _ = generate_keypair(pki.algorithm)
+expansion_values = [random_bytes(16) for _ in range(8)]
+
+bke_tickets = pki.issue_butterfly_authorization_tickets(
+    caterpillar_sign_priv=cat_priv,
+    expansion_values=expansion_values,
+    validity_hours=168,
+)
+# Each entry: {'at', 'certificate', 'sign_priv_key', 'sign_pub_key',
+#              'expansion_value', 'priv_key_pem'}
 ```
 
 ### Sign messages
@@ -191,15 +254,16 @@ signed_cam = sign_cam(
     at_cert_encoded=at_cert_bytes,
 )
 
-# Sign a DENM (signer = full certificate, location required)
+# Sign a DENM (full certificate, location required)
 signed_denm = sign_denm(
     denm_payload=b"DENM binary data",
     at_priv_key=at_priv_key,
     at_cert_encoded=at_cert_bytes,
-    generation_location=(525200000, 134050000, 340),  # Berlin
+    generation_location=(525200000, 134050000, 340),  # Berlin (0.1 µdeg units)
 )
 
 # Verify
+from src.crypto import load_public_key_from_compressed
 result = verify_signed_data(signed_cam, at_public_key)
 print(result['valid'])    # True
 print(result['psid'])     # 36 (CAM ITS-AID)
@@ -210,20 +274,59 @@ print(result['psid'])     # 36 (CAM ITS-AID)
 ```python
 from src.encryption import encrypt_data, decrypt_data
 
-# Encrypt for EA
 encrypted = encrypt_data(
     plaintext=b"Confidential message",
     recipient_cert_encoded=ea_cert_bytes,
     recipient_enc_pub_key=ea_enc_pub_key,
 )
 
-# Decrypt at EA
 plaintext = decrypt_data(
     encrypted_data_bytes=encrypted,
     recipient_enc_priv_key=ea_enc_priv_key,
     my_cert_encoded=ea_cert_bytes,
 )
 ```
+
+### Butterfly Key Expansion — low-level API
+
+```python
+from src.crypto import bke_expand_private_key, bke_expand_public_key
+from src.certificates import issue_butterfly_authorization_tickets
+
+# AA side: derive AT public keys and issue certificates
+at_certs = issue_butterfly_authorization_tickets(
+    caterpillar_sign_pub=caterpillar_pub,
+    expansion_values=expansion_values,
+    aa_cert=aa_cert,
+    aa_priv_key=aa_priv_key,
+    app_psids=psids,
+    sign_algorithm=algorithm,
+    validity_hours=168,
+)
+
+# Vehicle side: recover AT private key for certificate N
+at_priv_n = bke_expand_private_key(caterpillar_priv, expansion_values[n])
+```
+
+---
+
+## CLI Reference
+
+| Command | Description |
+|---|---|
+| `init` | Initialise PKI hierarchy (Root CA, TLM, EA, AA) |
+| `enrol` | Issue Enrolment Credential to an ITS-Station |
+| `issue-at` | Issue a single Authorization Ticket |
+| `butterfly-at` | Issue a BKE batch of Authorization Tickets |
+| `sign-cam` | Sign a CAM payload with an AT |
+| `sign-denm` | Sign a DENM payload with an AT and location |
+| `verify-sig` | Verify a signed message (optionally with certificate chain) |
+| `encrypt` | Encrypt a payload for a recipient (ECIES + AES-128-CCM) |
+| `decrypt` | Decrypt an encrypted message |
+| `verify-cert` | Verify a certificate's signature, validity, and profile constraints |
+| `info` | Display detailed certificate information |
+
+Run `python cli.py <command> --help` for all options.
 
 ---
 
@@ -237,15 +340,15 @@ bash tests/run_all.sh
 Individual test suites:
 
 ```bash
-bash tests/test_01_keygen.sh
-bash tests/test_02_root_ca.sh
-bash tests/test_03_ea_aa_certs.sh
-bash tests/test_04_tlm_ec_at.sh
-bash tests/test_05_signing.sh
-bash tests/test_06_encryption.sh
-bash tests/test_07_pki_init.sh
-bash tests/test_08_coer_encoding.sh
-bash tests/test_09_verification.sh
+bash tests/test_01_keygen.sh        # Key pair generation
+bash tests/test_02_root_ca.sh       # Root CA profile
+bash tests/test_03_ea_aa_certs.sh   # EA and AA certificates
+bash tests/test_04_tlm_ec_at.sh     # TLM, EC, and AT certificates
+bash tests/test_05_signing.sh       # CAM and DENM signing/verification
+bash tests/test_06_encryption.sh    # ECIES + AES-128-CCM
+bash tests/test_07_pki_init.sh      # Full PKI initialisation
+bash tests/test_08_coer_encoding.sh # COER encoding/decoding
+bash tests/test_09_verification.sh  # Certificate chain verification
 ```
 
 ---
@@ -267,22 +370,15 @@ bash tests/test_09_verification.sh
 
 | Entity | Profile | Issuer | id | encKey | certIssuePerms | appPerms |
 |---|---|---|---|---|---|---|
-| Root CA | 9.1 | self | name | ✗ | ✓ | CRL+CTL |
+| Root CA | 9.1 | self | name | ✗ | ✓ | CRL + CTL |
 | TLM | 9.4 | self | name | ✗ | ✗ | CTL |
 | EA | 9.2 | Root CA | name | ✓ | ✓ | CERT_REQUEST |
 | AA | 9.3 | Root CA | name | ✓ | ✓ | CERT_REQUEST |
 | EC | 9.5 | EA | name | ✗ | ✗ | CERT_REQUEST |
-| AT | 9.6 | AA | **none** | ✗ | ✗ | CAM+DENM |
+| AT | 9.6 | AA | **none** | ✗ | ✗ | CAM + DENM |
+| BKE AT | 9.6 | AA | **none** | ✗ | ✗ | CAM + DENM |
 
----
-
-## Security Notes
-
-- Private keys are stored as PEM (PKCS#8). In production, use an HSM (NFR-SEC-01).
-- All random number generation uses Python's `os.urandom()` (system CSPRNG).
-- AES-CCM nonces are freshly generated per encryption (NFR-SEC-04).
-- AT certificate `id = none` ensures pseudonymity (NFR-SEC-06).
-- AT and EC private keys are always independent key pairs (NFR-SEC-05).
+BKE ATs are structurally identical to standard ATs (same profile 9.6); they differ only in how the public key is derived.
 
 ---
 
@@ -291,61 +387,63 @@ bash tests/test_09_verification.sh
 ```
 C-ITS-PKI/
 ├── src/
-│   ├── __init__.py       Package init
-│   ├── coer.py           COER (ITU-T X.696) encoding primitives
-│   ├── types.py          ASN.1 data structure definitions
-│   ├── encoding.py       Certificate COER encoder/decoder
-│   ├── certificates.py   Certificate issuance (profiles 9.1–9.6)
-│   ├── pki.py            PKI hierarchy manager
-│   ├── signing.py        Message signing (EtsiTs103097Data-Signed)
-│   ├── encryption.py     ECIES + AES-128-CCM encryption
-│   └── verification.py   Certificate chain verification
+│   ├── __init__.py          Package init and public API exports
+│   ├── coer.py              COER (ITU-T X.696) encoding primitives
+│   ├── types.py             ASN.1 data structure definitions
+│   ├── encoding.py          Certificate COER encoder/decoder
+│   ├── crypto.py            ECDSA, ECIES, AES-128-CCM, BKE key expansion
+│   ├── certificates.py      Certificate issuance (profiles 9.1–9.6, BKE batch)
+│   ├── pki.py               PKI hierarchy manager (CITSPKI class)
+│   ├── signing.py           Message signing (EtsiTs103097Data-Signed)
+│   ├── encryption.py        ECIES + AES-128-CCM encryption/decryption
+│   └── verification.py      Certificate chain and profile verification
 ├── tests/
-│   ├── helpers.sh        Test helper functions
-│   ├── run_all.sh        Test suite runner
-│   ├── test_01_keygen.sh Key pair generation tests
-│   ├── test_02_root_ca.sh Root CA profile tests
-│   ├── test_03_ea_aa_certs.sh EA/AA certificate tests
+│   ├── helpers.sh           Test helper functions and assertions
+│   ├── run_all.sh           Full test suite runner
+│   ├── test_01_keygen.sh    Key pair generation tests
+│   ├── test_02_root_ca.sh   Root CA profile tests
+│   ├── test_03_ea_aa_certs.sh  EA/AA certificate tests
 │   ├── test_04_tlm_ec_at.sh TLM/EC/AT certificate tests
-│   ├── test_05_signing.sh Message signing tests
-│   ├── test_06_encryption.sh Encryption tests
-│   ├── test_07_pki_init.sh Full PKI initialisation tests
-│   ├── test_08_coer_encoding.sh COER encoding tests
-│   └── test_09_verification.sh Certificate verification tests
+│   ├── test_05_signing.sh   Message signing tests
+│   ├── test_06_encryption.sh   Encryption tests
+│   ├── test_07_pki_init.sh  Full PKI initialisation tests
+│   ├── test_08_coer_encoding.sh  COER encoding tests
+│   └── test_09_verification.sh   Certificate verification tests
 ├── docs/
-│   ├── README.md         This file
-│   └── architecture.md   System architecture documentation
-├── cli.py                Command-line interface
-├── gen-verify.sh         Functionality test script
-├── pyproject.toml        Python dependencies for uv
-└── requirements.txt      Python dependencies
+│   ├── README.md            This file
+│   └── architecture.md      System architecture documentation
+├── cli.py                   Command-line interface
+├── gen-verify.sh            End-to-end functional test script
+├── pyproject.toml           Python project metadata (uv)
+└── requirements.txt         Python dependencies (cryptography, tinyec)
 ```
 
 ---
 
-### Opportunities for Enhancement
+## Security Notes
 
-V2X (Vehicle-to-Everything) communication includes several message types beyond CAM (Cooperative Awareness Message) and DENM (Decentralized Environmental Notification Message).
+- Private keys are stored as PEM (PKCS#8). In production, use an HSM (NFR-SEC-01).
+- All random number generation uses Python's `os.urandom()` (system CSPRNG).
+- AES-CCM nonces are freshly generated per encryption operation (NFR-SEC-04).
+- AT certificate `id = none` ensures pseudonymity (NFR-SEC-06).
+- AT and EC private keys are always independent key pairs (NFR-SEC-05).
+- BKE caterpillar keys should be generated fresh per batch request and never reused across batches, to prevent the AA from linking batches.
+- BKE expansion values `eᵢ` must be stored alongside AT certificates to allow re-derivation of AT private keys from the caterpillar key.
 
-**ETSI/European Standards**
+---
 
-- MAPEM (MAP Extended Message) — transmits intersection topology and lane geometry
-- SPATEM (Signal Phase and Timing Extended Message) — conveys traffic light phase and timing info
-- IVIM (Infrastructure to Vehicle Information Message) — delivers road signs and in-vehicle signage data
-- SREM (Signal Request Extended Message) — allows vehicles (e.g., emergency or transit) to request signal priority
-- SSEM (Signal Status Extended Message) — response from infrastructure to signal requests
-- CPM (Collective Perception Message) — shares perceived objects (pedestrians, cyclists, other vehicles) detected by sensors
-- VAM (Vulnerable Road User Awareness Message) — broadcast by VRUs like cyclists and pedestrians
-- MCM (Maneuver Coordination Message) — used for negotiating cooperative maneuvers between vehicles
-- IMZM (Interference Management Zone Message) — marks areas where radio interference may occur
+## Opportunities for Enhancement
 
-**Other / Specialized**
+V2X communication includes many message types beyond CAM and DENM. The ETSI/European standards define MAPEM, SPATEM, IVIM, SREM, SSEM, CPM, VAM, MCM, and IMZM. The North American SAE standards define BSM, RSA, TIM, EVA, PSM, SRM, SSM, PVD, and PDM. Adding `ItsAid` enum entries and signing profiles for these message types is a natural extension.
 
-- GeoNetworking messages — underlying transport layer messages specific to ETSI ITS
-- SAM (Service Announcement Message) — advertises available V2X services in an area
-- RTCM (Real-Time Correction Message) — delivers GNSS correction data for high-precision positioning
+Other potential enhancements include:
 
-The landscape is still evolving, with CPM and MCM being relatively newer additions aimed at supporting higher levels of automation and cooperative driving.
+- EC request/response protocol (ETSI TS 102 941 §6.2.2) for online enrolment
+- AT request/response protocol (ETSI TS 102 941 §6.2.3) with privacy-preserving re-encryption
+- Certificate Revocation List (CRL) generation and verification
+- Misbehaviour reporting (ETSI TS 102 941 §6.4)
+- Implicit (ECQV) certificate support
+
 ---
 
 ## License
