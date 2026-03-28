@@ -6,9 +6,11 @@ Conforming to ETSI TS 103 097 V2.2.1 / IEEE Std 1609.2-2025.
 Usage:
     python cli.py init        [--output DIR] [--algo p256|p384] [--region 65535]
     python cli.py enrol       --output DIR --name ITS_NAME [--ec-validity 1]
-    python cli.py issue-at    --output DIR [--psid 36,37] [--at-validity 168]
+    python cli.py issue-at    --output DIR [--psid 36,37] [--at-validity 168] [--at-output DIR]
+    python cli.py butterfly-at --output DIR [--count 8] [--psid 36,37] [--at-validity 168]
     python cli.py sign-cam    --at-key FILE --at-cert FILE --payload FILE [--output FILE]
     python cli.py sign-denm   --at-key FILE --at-cert FILE --payload FILE --lat LAT --lon LON
+    python cli.py verify-sig  --signed FILE --at-cert FILE [--root FILE] [--aa FILE]
     python cli.py encrypt     --enc-cert FILE --enc-key FILE --payload FILE [--output FILE]
     python cli.py decrypt     --enc-cert FILE --enc-key FILE --input FILE
     python cli.py verify-cert --cert FILE [--issuer FILE] [--root FILE]
@@ -54,6 +56,14 @@ def main():
     p_at.add_argument('--validity', type=int, default=168, help='Validity in hours (default: 168=1 week)')
     p_at.add_argument('--at-output', help='Output directory for AT')
 
+    # butterfly-at
+    p_bke = sub.add_parser('butterfly-at', help='Issue a batch of ATs via Butterfly Key Expansion')
+    p_bke.add_argument('--output', '-o', default='pki-output')
+    p_bke.add_argument('--count', type=int, default=8, help='Number of ATs to issue (default: 8)')
+    p_bke.add_argument('--psid', help='Comma-separated PSIDs (default: 36,37)')
+    p_bke.add_argument('--validity', type=int, default=168, help='Validity in hours (default: 168=1 week)')
+    p_bke.add_argument('--at-output', help='Output directory for AT')
+
     # sign-cam
     p_cam = sub.add_parser('sign-cam', help='Sign a CAM payload')
     p_cam.add_argument('--at-key', required=True)
@@ -73,11 +83,11 @@ def main():
     p_denm.add_argument('--output', '-o')
 
     # verify-sig
-    p_vcam = sub.add_parser('verify-sig', help='Verify a signed CAM file')
+    p_vcam = sub.add_parser('verify-sig', help='Verify a signed C-ITS message file')
     p_vcam.add_argument('--signed', required=True,
-                        help='Signed CAM file (EtsiTs103097Data-Signed, COER)')
+                        help='Signed C-ITS message file (EtsiTs103097Data-Signed, COER)')
     p_vcam.add_argument('--at-cert', required=True,
-                        help='AT certificate used to sign the CAM (COER)')
+                        help='AT certificate used to sign the C-ITS message file (COER)')
     p_vcam.add_argument('--root', default=None,
                         help='Root CA certificate for chain verification (COER)')
     p_vcam.add_argument('--aa', default=None,
@@ -113,6 +123,7 @@ def main():
         'init': cmd_init,
         'enrol': cmd_enrol,
         'issue-at': cmd_issue_at,
+        'butterfly-at': cmd_butterfly_at,
         'sign-cam': cmd_sign_cam,
         'sign-denm': cmd_sign_denm,
         'verify-sig': cmd_verify_sig,
@@ -259,6 +270,51 @@ def cmd_issue_at(args):
     print(f"     AT certificate : {at_cert_path} ({len(at.encoded)} bytes)")
     print(f"     Private key    : {at_key_path}")
 
+def cmd_butterfly_at(args):
+    from src.types import PublicKeyAlgorithm, PsidSsp
+    from src.crypto import generate_keypair, serialize_private_key, deserialize_private_key, random_bytes, bke_expand_private_key
+    from src.certificates import issue_butterfly_authorization_tickets
+    from src.encoding import decode_certificate
+    from datetime import datetime, timezone
+    import json
+
+    out_dir = Path(args.output)
+    meta = json.loads((out_dir / 'pki_meta.json').read_text())
+    algo = PublicKeyAlgorithm(meta['algorithm'])
+    aa_cert_bytes = (out_dir / 'aa.cert').read_bytes()
+    aa_priv_pem   = (out_dir / 'aa_sign.key').read_bytes()
+    aa_cert, _ = decode_certificate(aa_cert_bytes)
+    aa_cert.encoded = aa_cert_bytes
+    aa_priv_key = deserialize_private_key(aa_priv_pem)
+    psids = [PsidSsp(psid=int(p)) for p in args.psid.split(',')] if args.psid else None
+
+    cat_priv, cat_pub = generate_keypair(algo)
+    expansion_values = [random_bytes(16) for _ in range(args.count)]
+
+    print(f"[BKE] Issuing {args.count} butterfly ATs...")
+    at_certs = issue_butterfly_authorization_tickets(
+        caterpillar_sign_pub=cat_pub,
+        expansion_values=expansion_values,
+        aa_cert=aa_cert,
+        aa_priv_key=aa_priv_key,
+        app_psids=psids,
+        sign_algorithm=algo,
+        validity_hours=args.validity,
+    )
+
+    # ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    # at_dir = Path(args.at_output or out_dir / 'bke-tickets' / ts)
+    at_dir = Path(args.at_output or out_dir / 'bke-tickets')
+    at_dir.mkdir(parents=True, exist_ok=True)
+    (at_dir / 'caterpillar_sign.key').write_bytes(serialize_private_key(cat_priv))
+
+    for i, (cert, e_i) in enumerate(zip(at_certs, expansion_values)):
+        at_priv = bke_expand_private_key(cat_priv, e_i)
+        (at_dir / f'bke_at_{i}.cert').write_bytes(cert.encoded)
+        (at_dir / f'bke_at_{i}_sign.key').write_bytes(serialize_private_key(at_priv))
+        (at_dir / f'bke_at_{i}.expansion').write_bytes(e_i)
+
+    print(f"[OK] {args.count} butterfly ATs issued → {at_dir}")
 
 def cmd_sign_cam(args):
     """Sign a CAM payload."""
@@ -459,6 +515,8 @@ def cmd_verify_sig(args):
             ("AT appPermissions present", details.get('leaf_permissions')),
         ]
 
+        # Check the AT-specific constraints 
+        #      (id = none, no certIssuePermissions, appPermissions present)
         at_profile_ok, at_profile_msg = verify_at_profile(at_cert)
         checks.append(("AT profile constraints", at_profile_ok))
 
@@ -547,11 +605,11 @@ def cmd_decrypt(args):
 def cmd_verify_cert(args):
     """Verify a certificate's signature and profile constraints."""
     from src.encoding import decode_certificate
-    from src.types import PublicKeyAlgorithm
+    from src.types import PublicKeyAlgorithm, CertIdChoice
     from src.verification import (
         verify_certificate_signature, verify_certificate_validity_period,
         verify_craca_and_crl_series, verify_permissions_constraints,
-        verify_region_constraint
+        verify_region_constraint, verify_at_profile
     )
 
     cert_bytes = Path(args.cert).read_bytes()
@@ -589,6 +647,10 @@ def cmd_verify_cert(args):
 
     region_ok, region_msg = verify_region_constraint(cert)
     results.append((f"Region ({region_msg})", region_ok))
+
+    if cert.tbs.id.choice == CertIdChoice.NONE:
+        at_ok, at_msg = verify_at_profile(cert)
+        results.append((f"AT profile ({at_msg})", at_ok))
 
     print(f"\n[Verification Results]")
     all_ok = True

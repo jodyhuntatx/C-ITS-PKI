@@ -371,3 +371,57 @@ def issue_authorization_ticket(
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=aa_hash)
 
     return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key, sign_algorithm)
+
+# ── Profile 9.6 (BKE variant) — Butterfly AT batch issuance ──────────────────
+
+def issue_butterfly_authorization_tickets(
+    caterpillar_sign_pub,
+    expansion_values: list,
+    aa_cert: Certificate,
+    aa_priv_key,
+    app_psids:       Optional[list] = None,
+    sign_algorithm:  PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256,
+    validity_hours:  int = 168,
+    region_ids:      Optional[list] = None,
+    start_time:      Optional[float] = None,
+) -> list:
+    """
+    Issue a batch of AT certificates via Butterfly Key Expansion.
+    For each eᵢ the AA derives Sᵢ = Cf + H(Cf||eᵢ)·G and issues an AT
+    certificate bound to Sᵢ.  All certs are conformant profile 9.6
+    (id=none, no certIssuePermissions, appPermissions present).
+    Per IEEE 1609.2a §6.4.3.7 and ETSI TS 102 941 §6.2.3.3.1.
+    """
+    from .crypto import bke_expand_public_key
+
+    t = start_time or time.time()
+    psids = app_psids or [
+        PsidSsp(psid=int(ItsAid.CAM)),
+        PsidSsp(psid=int(ItsAid.DENM)),
+    ]
+    aa_hash = hash_certificate(aa_cert.encoded, sign_algorithm)
+    issuer = (
+        IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=aa_hash)
+        if sign_algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256
+        else IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=aa_hash)
+    )
+
+    tickets = []
+    for e_i in expansion_values:
+        at_sign_pub = bke_expand_public_key(caterpillar_sign_pub, e_i)
+        vp = _make_validity_period(t, duration_hours=validity_hours)
+        vk = PublicVerificationKey(algorithm=sign_algorithm, point=public_key_to_point(at_sign_pub))
+        region = GeographicRegion(choice=RegionChoice.ID, ids=region_ids) if region_ids else None
+        tbs = ToBeSignedCertificate(
+            id=CertificateId(CertIdChoice.NONE),
+            craca_id=CRACA_ID,
+            crl_series=CRL_SERIES,
+            validity_period=vp,
+            region=region,
+            app_permissions=psids,
+            cert_issue_permissions=None,
+            encryption_key=None,
+            verify_key_indicator=vk,
+        )
+        tickets.append(_build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key, sign_algorithm))
+    return tickets

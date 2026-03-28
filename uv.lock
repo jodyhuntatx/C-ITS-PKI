@@ -14,10 +14,14 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cryptography" },
+    { name = "tinyec" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "cryptography", specifier = ">=46.0.5" }]
+requires-dist = [
+    { name = "cryptography", specifier = ">=46.0.5" },
+    { name = "tinyec", specifier = ">=0.4.0" },
+]
 
 [[package]]
 name = "cffi"
@@ -136,3 +140,9 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "cryptography", specifier = ">=46.0.5" }]
+
+[[package]]
+name = "tinyec"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/76/2f/1bf6060620aae864597422ed50a0b46ad66a720d22e0f5d6c62e58aebff9/tinyec-0.4.0.tar.gz", hash = "sha256:b0364aab3b9af632b64f24eafae0c8e56cc64b4845648752610f48f2ab0547a3", size = 24069, upload-time = "2021-11-08T19:15:51.532Z" }

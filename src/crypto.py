@@ -217,6 +217,71 @@ def aes_ccm_decrypt(key: bytes, nonce: bytes, ciphertext_with_tag: bytes,
     aesccm = AESCCM(key, tag_length=16)
     return aesccm.decrypt(nonce, ciphertext_with_tag, aad if aad else None)
 
+# ── Curve constants ───────────────────────────────────────────────────────────
+
+_P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_P384_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFC7634D81F4372DDF581A0DB248B0A77AECEC196ACCC52973
+
+def _curve_order(curve) -> int:
+    if isinstance(curve, SECP256R1):
+        return _P256_ORDER
+    return _P384_ORDER
+
+
+# ── Butterfly Key Expansion (IEEE 1609.2a §6.4.3.7) ──────────────────────────
+
+def bke_expand_private_key(
+    caterpillar_priv: EllipticCurvePrivateKey,
+    expansion_value: bytes,
+) -> EllipticCurvePrivateKey:
+    """
+    Derive a butterfly AT private key: sᵢ = (f + H(Cf || eᵢ)) mod n
+    Called by the ITS-Station to recover the AT private key after
+    receiving the AT certificate from the AA.
+    """
+    curve = caterpillar_priv.curve
+    n = _curve_order(curve)
+    cf_bytes = caterpillar_priv.public_key().public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.CompressedPoint
+    )
+    h = int.from_bytes(hashlib.sha256(cf_bytes + expansion_value).digest(), 'big') % n
+    f = caterpillar_priv.private_numbers().private_value
+    s_i = (f + h) % n
+    if s_i == 0:
+        raise ValueError("BKE: derived private key scalar is zero — reject this expansion value")
+    return derive_private_key(s_i, curve, default_backend())
+
+
+def bke_expand_public_key(
+    caterpillar_pub: EllipticCurvePublicKey,
+    expansion_value: bytes,
+) -> EllipticCurvePublicKey:
+    """
+    Derive a butterfly AT public key: Sᵢ = Cf + H(Cf || eᵢ)·G
+    Called by the AA to compute AT public keys without knowing private keys.
+    """
+    from tinyec import registry as tinyec_registry
+    from tinyec import ec as tinyec_ec
+
+    curve = caterpillar_pub.curve
+    n = _curve_order(curve)
+    cf_bytes = caterpillar_pub.public_bytes(
+        serialization.Encoding.X962,
+        serialization.PublicFormat.CompressedPoint
+    )
+    h = int.from_bytes(hashlib.sha256(cf_bytes + expansion_value).digest(), 'big') % n
+
+    tc_name = 'secp256r1' if isinstance(curve, SECP256R1) else 'secp384r1'
+    tc = tinyec_registry.get_curve(tc_name)
+    cf_nums = caterpillar_pub.public_numbers()
+    cf_point = tinyec_ec.Point(tc, cf_nums.x, cf_nums.y)
+    S_i = cf_point + (h * tc.g)
+
+    if S_i.x is None or S_i.y is None:
+        raise ValueError("BKE: derived public key is the point at infinity — reject this expansion value")
+
+    return EllipticCurvePublicNumbers(S_i.x, S_i.y, curve).public_key(default_backend())
 
 # ── Utility ───────────────────────────────────────────────────────────────────
 

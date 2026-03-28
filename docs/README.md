@@ -316,6 +316,8 @@ C-ITS-PKI/
 │   ├── README.md         This file
 │   └── architecture.md   System architecture documentation
 ├── cli.py                Command-line interface
+├── gen-verify.sh         Functionality test script
+├── pyproject.toml        Python dependencies for uv
 └── requirements.txt      Python dependencies
 ```
 

@@ -16,7 +16,8 @@ from .crypto import (
 )
 from .certificates import (
     issue_root_ca_certificate, issue_ea_certificate, issue_aa_certificate,
-    issue_tlm_certificate, issue_enrolment_credential, issue_authorization_ticket
+    issue_tlm_certificate, issue_enrolment_credential, issue_authorization_ticket,
+    issue_butterfly_authorization_tickets as _issue_bke_ats
 )
 
 
@@ -192,6 +193,49 @@ class CITSPKI:
             'aa': aa_cert.encoded,
         }
 
+    # ── Butterfly Key Expansion AT Batch Provisioning ─────────────────────────
+    def issue_butterfly_authorization_tickets(
+        self,
+        caterpillar_sign_priv,
+        expansion_values: list,
+        app_psids: Optional[list] = None,
+        validity_hours: int = 168,
+        region_ids: Optional[list] = None,
+        start_time: Optional[float] = None,
+    ) -> list:
+        """
+        Issue a batch of ATs via BKE (IEEE 1609.2a §6.4.3.7).
+        Returns list of dicts: at, certificate, sign_priv_key, sign_pub_key,
+        expansion_value, priv_key_pem.
+        """
+        if self.aa is None:
+            raise RuntimeError("PKI not initialised. Call initialise() first.")
+        from .crypto import bke_expand_private_key
+
+        at_certs = _issue_bke_ats(
+            caterpillar_sign_pub=caterpillar_sign_priv.public_key(),
+            expansion_values=expansion_values,
+            aa_cert=self.aa.certificate,
+            aa_priv_key=self.aa.sign_priv_key,
+            app_psids=app_psids,
+            sign_algorithm=self.algorithm,
+            validity_hours=validity_hours,
+            region_ids=region_ids or self.region_ids,
+            start_time=start_time,
+        )
+        results = []
+        for cert, e_i in zip(at_certs, expansion_values):
+            at_priv = bke_expand_private_key(caterpillar_sign_priv, e_i)
+            results.append({
+                'at': cert.encoded,
+                'certificate': cert,
+                'sign_priv_key': at_priv,
+                'sign_pub_key': at_priv.public_key(),
+                'expansion_value': e_i,
+                'priv_key_pem': serialize_private_key(at_priv),
+            })
+        return results
+    
     # ── ITS-Station Enrolment ─────────────────────────────────────────────────
 
     def enrol_its_station(self,

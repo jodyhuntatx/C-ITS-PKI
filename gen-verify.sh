@@ -12,10 +12,11 @@ main() {
   init_pki
   enroll_its_station
   issue_auth_ticket
-  sign_a_cam
-  sign_a_denm
+  issue_bke_tickets
+  sign_and_verify_a_cam
+  sign_and_verify_a_denm
   encrypt_a_message
-  decrypt_a_message
+  decrypt_and_verify_a_message
 }
 
 #===================================
@@ -58,18 +59,32 @@ issue_auth_ticket() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Issue an Authorization Ticket"
-  rm -rf pki-output/tickets/at_*
+  rm -rf pki-output/tickets
   $PKI_CMD issue-at --output pki-output --psid 36,37 --validity 168
-  AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
+  AUTH_TICKET=$(ls ./pki-output/tickets/at_*.cert)
   $PKI_CMD info --cert $AUTH_TICKET
   echo "Verifying signed by AA cert..."
   SIGN_KEY=$(ls ./pki-output/aa.cert)
   $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY
 }
 
+#===================================
+issue_bke_tickets() {
+  echo; echo; echo; echo; 
+  echo "######################"
+  echo "Issue BKE Authorization Tickets"
+  rm -rf pki-output/bke-tickets
+  $PKI_CMD butterfly-at --output pki-output --count 8 --psid 36,37 --validity 168
+  AUTH_TICKET=$(ls ./pki-output/bke-tickets/bke_at_0.cert)
+  $PKI_CMD info --cert $AUTH_TICKET
+  echo "Verifying butterfly AT cert was signed by AA cert..."
+  SIGN_KEY=$(ls ./pki-output/aa.cert)
+  $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY
+}
+
 
 #===================================
-sign_a_cam() {
+sign_and_verify_a_cam() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Sign & verify a CAM"
@@ -96,7 +111,7 @@ sign_a_cam() {
 }
 
 #===================================
-sign_a_denm() {
+sign_and_verify_a_denm() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Sign & verify a DENM"
@@ -136,7 +151,7 @@ encrypt_a_message() {
 }
 
 #===================================
-decrypt_a_message() {
+decrypt_and_verify_a_message() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Decrypt & verify a message"
