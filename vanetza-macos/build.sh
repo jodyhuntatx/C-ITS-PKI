@@ -5,6 +5,7 @@ source ./local.env
 
 main() {
   setup
+  mkdir -p $VHOME/vanetza-build
   cd $VHOME/vanetza-build
   install_deps
   cmake .. \
@@ -45,10 +46,9 @@ setup() {
   echo "Differences:"
   sdiff -s $VHOME/CMakeLists.txt ./CMakeLists.txt
   cp ./CMakeLists.txt $VHOME
+
   echo "Copying Darwin-specific Toolchain file to $VHOME/cmake..."
   cp ./Toolchain-Darwin.cmake $VHOME/cmake
-
-  mkdir -p $VHOME/vanetza-build
 }
 
 #######################################
@@ -87,10 +87,11 @@ build_boost() {
     echo "Untarring tarfile..."
     tar xf ${BOOST_TARFILE}
   fi
-  cd ${BOOST_BUILD_DIR}
-  ./bootstrap.sh --prefix=${BOOST_INSTALL_DIR}
-  ./b2
-  ./b2 install
+  pushd ${BOOST_BUILD_DIR}
+    ./bootstrap.sh --prefix=${BOOST_INSTALL_DIR}
+    ./b2
+    ./b2 install
+  popd
 }
 
 main "$@"
