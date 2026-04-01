@@ -14,7 +14,7 @@ A Python implementation of a complete C-ITS Public Key Infrastructure conforming
 ## Background Reading
 
 - [All You Need to Know About V2X PKI Certificates: Butterfly Key Expansion and Implicit Certificates](https://autocrypt.io/v2x-pki-certificates-butterfly-key-expansion-implicit-certificates/)
-- [C-ITS-PKI Implementation notes](/docs/C-ITS-PKI Implementation Notes.md)
+- [C-ITS-PKI Implementation notes](/docs/C-ITS-PKIImplementationNotes.md)
 
 ---
 
