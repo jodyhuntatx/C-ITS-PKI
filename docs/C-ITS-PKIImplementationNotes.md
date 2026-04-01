@@ -166,9 +166,9 @@ In short: CAMP's C-V2X Performance Assessment project is the wrong tool for cred
 
 # **Specialist Task Force 424:**
 
-# **Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decentralized environmental Notification Messages (DENM) and GeoNetworking Protocols**
+**Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decentralized environmental Notification Messages (DENM) and GeoNetworking Protocols**
 
-# [https://portal.etsi.org/STF/STFs/STF-Homepages/STF424](https://portal.etsi.org/STF/STFs/STF-Homepages/STF424)
+- [https://portal.etsi.org/STF/STFs/STF-Homepages/STF424](https://portal.etsi.org/STF/STFs/STF-Homepages/STF424)
 
 ---
 
