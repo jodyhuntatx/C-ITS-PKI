@@ -56,6 +56,8 @@ The misbehaviour detection tension is a fundamental one: the system needs enough
 
 So in summary: BKE \+ split CAs give you solid *cryptographic* unlinkability at the PKI layer, but full untrackability requires coordinated AT rotation policy, MAC randomisation, and careful application-layer design on top.
 
+---
+
 ***With BKE is there a need for an expansion key and signing key for every certificate?***
 
 No — that's actually one of the key privacy advantages of BKE.
@@ -83,6 +85,8 @@ Certificate/AuthTicket: 	133 bytes
 	149 bytes/ticket
 
 Or at 1000 tickets/month, \~14K per month
+
+---
 
 **Regarding BKE, have there been any formal or informal best practices been established regarding:**
 
@@ -165,6 +169,8 @@ In short: CAMP's C-V2X Performance Assessment project is the wrong tool for cred
 # **Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decentralized environmental Notification Messages (DENM) and GeoNetworking Protocols**
 
 # [https://portal.etsi.org/STF/STFs/STF-Homepages/STF424](https://portal.etsi.org/STF/STFs/STF-Homepages/STF424)
+
+---
 
 ## **How CAM Signature Verification Works in This Repo**
 
