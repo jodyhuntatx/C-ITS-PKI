@@ -1,4 +1,4 @@
-***Does BKE and split intermediate CAs ensure privacy and untrackability?***
+# ***Does BKE and split intermediate CAs ensure privacy and untrackability?***
 
 Not on their own — they are necessary but not sufficient. Here's a precise breakdown of what each mechanism actually protects against, and what gaps remain.
 
@@ -58,7 +58,7 @@ So in summary: BKE \+ split CAs give you solid *cryptographic* unlinkability at 
 
 ---
 
-***With BKE is there a need for an expansion key and signing key for every certificate?***
+# ***With BKE is there a need for an expansion key and signing key for every certificate?***
 
 No — that's actually one of the key privacy advantages of BKE.
 
@@ -88,7 +88,7 @@ Or at 1000 tickets/month, \~14K per month
 
 ---
 
-**Regarding BKE, have there been any formal or informal best practices been established regarding:**
+# **Regarding BKE, have there been any formal or informal best practices been established regarding:**
 
 * **caterpillar key rotation**  
 * **how many ATs should be generated per batch**  
@@ -150,7 +150,7 @@ This is the least formally specified area. The key references are:
 
 ---
 
-**What is the best way to validate the credentials issued by the code in this repo?**
+# **What is the best way to validate the credentials issued by the code in this repo?**
 
 The most tractable approach for validating this repo's output against an external tool is to target **ETSI's own test infrastructure**:
 
@@ -164,15 +164,17 @@ The most tractable approach for validating this repo's output against an externa
 
 In short: CAMP's C-V2X Performance Assessment project is the wrong tool for credential validation. The right ecosystem for validating ETSI-profile credentials from this repo is ETSI's own Plugtests toolchain or Marben's conformance tools, neither of which is publicly open source. The closest open-source alternative is the NIST tool or the JPO/Leidos `jpo-security` library, both of which require bridging work due to the ETSI vs North American profile differences.
 
+---
+
 # **Specialist Task Force 424:**
 
-**Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decentralized environmental Notification Messages (DENM) and GeoNetworking Protocols**
+Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decentralized environmental Notification Messages (DENM) and GeoNetworking Protocols
 
 - [https://portal.etsi.org/STF/STFs/STF-Homepages/STF424](https://portal.etsi.org/STF/STFs/STF-Homepages/STF424)
 
 ---
 
-## **How CAM Signature Verification Works in This Repo**
+# **How CAM Signature Verification Works in This Repo**
 
 ### **Architecture Overview**
 
