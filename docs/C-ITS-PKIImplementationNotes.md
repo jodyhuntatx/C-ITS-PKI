@@ -6,11 +6,15 @@ Not on their own — they are necessary but not sufficient. Here's a precise bre
 
 ### **What BKE provides**
 
+
 **Unlinkability between ATs in a batch.** The AA sees only the caterpillar public key `Cf` and the expansion values `{eᵢ}`. It cannot link the N issued AT certificates to each other without also knowing `f`, because each derived public key `Sᵢ = Cf + H(Cf‖eᵢ)·G` looks like an independent random key to any outside observer. Crucially, the AA itself cannot correlate the ATs it just issued to future messages signed with them — it never sees the private keys.
+
 
 **Unlinkability between the EC and the ATs.** The AA only receives the caterpillar key from the EA (via a privacy-preserving protocol), not the EC directly. The vehicle's long-term identity is never exposed to the AA.
 
+
 **What BKE does not fix on its own:**
+
 
 * If a vehicle uses the *same caterpillar key* across multiple batch requests to the same AA, the AA can link all those batches together. Caterpillar keys need to be rotated regularly.  
 * The AT certificates themselves, once issued, are pseudonymous but not anonymous. Any observer who sees you sign two different messages with two ATs from the same batch cannot link them *cryptographically*, but if the messages carry other identifying information (GPS coordinates, timing, payload structure) they can be correlated at the application layer.  
