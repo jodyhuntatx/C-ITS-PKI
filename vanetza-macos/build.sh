@@ -9,7 +9,7 @@ main() {
   cd $VHOME/vanetza-build
   install_deps
   cmake .. \
-    -DCMAKE_TOOLCHAIN_FILE=$VHOME/cmake/Toolchain-Darwin.cmake \
+    -DCMAKE_TOOLCHAIN_FILE=$VHOME/cmake/Toolchain-ARM64.cmake \
     -DCMAKE_FIND_ROOT_PATH=$VHOME/vanetza-deps \
     -DCMAKE_INSTALL_RPATH=\$ORIGIN/../lib \
     -DCMAKE_INSTALL_PREFIX=$VHOME/vanetza-dist \
@@ -35,42 +35,11 @@ main() {
 
 #######################################
 setup() {
-  # Clone repo if not there
-  if [ ! -d "$VHOME" ]; then
-    pushd $VROOT
-      git clone git@github.com:riebl/vanetza.git
-    popd
-  fi
-
-  echo "Copying Darwin-specific CMakeList.txt to $VHOME..."
-  echo "Differences:"
-  sdiff -s $VHOME/CMakeLists.txt ./CMakeLists.txt
-  cp ./CMakeLists.txt $VHOME
-
-  echo "Copying Darwin-specific Toolchain file to $VHOME/cmake..."
-  cp ./Toolchain-Darwin.cmake $VHOME/cmake
+  echo "Running setup...."
 }
 
 #######################################
 install_deps() {
-  echo "Installing MacOS CLI tools..."
-  xcode-select --install
-
-  if [[ "$(which brew)" == "" ]]; then
-    echo "Installing Homebrew..."
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-  fi
-
-  if [[ "$(which gcc)" == "" ]]; then
-    echo "Installing gcc/g++ ...."
-    brew install gcc
-  fi
-
-  if [[ "$(which doxygen)" == "" ]]; then
-    echo "Installing doxygen & graphviz ...."
-    brew install doxygen graphviz
-  fi
-
   if [ ! -d ${BOOST_INSTALL_DIR} ]; then
     echo "Building Boost lib..."
     build_boost
