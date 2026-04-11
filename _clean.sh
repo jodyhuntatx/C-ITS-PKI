@@ -1,7 +1,8 @@
 #!/bin/bash
 echo "Size before: $(du -sh | cut -f1)"
-rm -rf vanetza-docker/vanetza-nap
-rm ./cam.* ./denm.*
+rm -rf vanetza-docker/vanetza
+pushd vanetza-docker/tool-build; ./_clean.sh; popd
+rm ./cam.* ./denm.* ./*.key
 rm -rf pki-output
 rm -rf src/__pycache__/
 rm -rf .venv
