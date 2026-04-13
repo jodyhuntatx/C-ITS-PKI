@@ -1,4 +1,10 @@
-# ***Does BKE and split intermediate CAs ensure privacy and untrackability?***
+# C-ITS PKI Implementation Notes
+
+This document contains implementation notes, background analysis, and FAQ entries accumulated during development of the C-ITS PKI.
+
+---
+
+# Does BKE and split intermediate CAs ensure privacy and untrackability?
 
 Not on their own — they are necessary but not sufficient. Here's a precise breakdown of what each mechanism actually protects against, and what gaps remain.
 
@@ -58,7 +64,7 @@ So in summary: BKE \+ split CAs give you solid *cryptographic* unlinkability at 
 
 ---
 
-# ***With BKE is there a need for an expansion key and signing key for every certificate?***
+# With BKE is there a need for an expansion key and signing key for every certificate?
 
 No — that's actually one of the key privacy advantages of BKE.
 
@@ -88,7 +94,7 @@ Or at 1000 tickets/month, \~14K per month
 
 ---
 
-# **Regarding BKE, have there been any formal or informal best practices been established regarding:**
+# Regarding BKE, have there been any formal or informal best practices been established regarding:
 
 * **caterpillar key rotation**  
 * **how many ATs should be generated per batch**  
@@ -150,23 +156,25 @@ This is the least formally specified area. The key references are:
 
 ---
 
-# **What is the best way to validate the credentials issued by the code in this repo?**
+# What is the best way to validate the credentials issued by the code in this repo?
 
 The most tractable approach for validating this repo's output against an external tool is to target **ETSI's own test infrastructure**:
 
-**Option A — ETSI ETSI ITS Plugtests conformance tools.** ETSI runs C-V2X Plugtests (the 4th was in Malaga, September 2024\) where PKI certificates from participating implementations are validated for ETSI TS 103 097 conformance. The test tooling used at those events includes certificate parsers and signature verifiers built against the ETSI profile. ETSI publishes the test plans but the tools themselves are provided under NDA to plugtest participants.
+**Option A — vanetza `certify` tool.** The vanetza simulator includes a `certify` command-line tool that can parse and display certificate information from binary files. Certificates generated in the default V1.2.1 mode by this repo load and display correctly in vanetza's `certify` tool, providing direct validation against the vanetza `security/v2` implementation. This is the most accessible validation path for the vanetza-format certificates.
 
-**Option B — Marben V2X test tools.** Marben (a French ITS test tool vendor, also mentioned in the OmniAir Plugfest description) produces conformance test tools for ETSI TS 103 097 certificates and signed messages. These are commercial but are the reference tools used in European C-ITS deployment testing.
+**Option B — ETSI ITS Plugtests conformance tools.** ETSI runs C-V2X Plugtests (the 4th was in Malaga, September 2024\) where PKI certificates from participating implementations are validated for ETSI TS 103 097 conformance. The test tooling used at those events includes certificate parsers and signature verifiers built against the ETSI profile. ETSI publishes the test plans but the tools themselves are provided under NDA to plugtest participants.
 
-**Option C — Build a validation bridge using `jpo-security`.** If you want to use the open-source JPO tools, the path is to write a thin converter that takes a signed `EtsiTs103097Data-Signed` output from this repo, rewraps it in the `Ieee1609Dot2Data` envelope that `jpo-security` expects, and maps the certificate fields across. This is tractable for the explicit certificate fields but requires care around the PSID values (CAM PSID 36 vs BSM PSID 32).
+**Option C — Marben V2X test tools.** Marben (a French ITS test tool vendor, also mentioned in the OmniAir Plugfest description) produces conformance test tools for ETSI TS 103 097 certificates and signed messages. These are commercial but are the reference tools used in European C-ITS deployment testing.
 
-**Option D — NIST tool with custom certificate loader.** The `usnistgov/C-V2XInteroperabilityTestingTool` is the most accessible open-source option. It parses 1609.2 messages from pcap captures. If you sign a CAM with this repo's AT and inject it as a DSRC/C-V2X packet capture, the NIST tool can attempt to parse and validate it — though again you will hit the ETSI vs IEEE 1609.2 profile differences in practice.
+**Option D — Build a validation bridge using `jpo-security`.** If you want to use the open-source JPO tools, the path is to write a thin converter that takes a signed `EtsiTs103097Data-Signed` output from this repo, rewraps it in the `Ieee1609Dot2Data` envelope that `jpo-security` expects, and maps the certificate fields across. This is tractable for the explicit certificate fields but requires care around the PSID values (CAM PSID 36 vs BSM PSID 32).
 
-In short: CAMP's C-V2X Performance Assessment project is the wrong tool for credential validation. The right ecosystem for validating ETSI-profile credentials from this repo is ETSI's own Plugtests toolchain or Marben's conformance tools, neither of which is publicly open source. The closest open-source alternative is the NIST tool or the JPO/Leidos `jpo-security` library, both of which require bridging work due to the ETSI vs North American profile differences.
+**Option E — NIST tool with custom certificate loader.** The `usnistgov/C-V2XInteroperabilityTestingTool` is the most accessible open-source option. It parses 1609.2 messages from pcap captures. If you sign a CAM with this repo's AT and inject it as a DSRC/C-V2X packet capture, the NIST tool can attempt to parse and validate it — though again you will hit the ETSI vs IEEE 1609.2 profile differences in practice.
+
+In short: the most direct open-source validation path is the vanetza `certify` tool (Option A), which has been confirmed to correctly parse certificates generated by this repo. For ETSI conformance testing against the V2.2.1 COER format, ETSI's own Plugtests toolchain or Marben's conformance tools are the authoritative references (neither is publicly open source). The NIST tool and JPO/Leidos `jpo-security` library are closest to open-source alternatives for V2.2.1 but require bridging work due to the ETSI vs North American profile differences.
 
 ---
 
-# **Specialist Task Force 424:**
+# Specialist Task Force 424:
 
 Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decentralized environmental Notification Messages (DENM) and GeoNetworking Protocols
 
@@ -174,11 +182,11 @@ Platform for Conformance Testing of Co-operative Awareness Messages (CAM), Decen
 
 ---
 
-# **How CAM Signature Verification Works in This Repo**
+# How CAM Signature Verification Works in This Repo
 
-### **Architecture Overview**
+### Architecture Overview
 
-The repo is a Python implementation of the ETSI TS 103 097 V2.2.1 / IEEE 1609.2-2025 PKI stack. The relevant source files are:
+The repo is a Python implementation of the ETSI TS 103 097 V1.2.1 / V2.2.1 PKI stack. The relevant source files are:
 
 | File | Role |
 | ----- | ----- |
@@ -186,7 +194,8 @@ The repo is a Python implementation of the ETSI TS 103 097 V2.2.1 / IEEE 1609.2-
 | `src/signing.py` | Signs and verifies `EtsiTs103097Data-Signed` structures |
 | `src/verification.py` | Verifies certificate chains |
 | `src/crypto.py` | ECDSA P-256/P-384 primitives |
-| `src/encoding.py` | COER encode/decode for certificates |
+| `src/v1_encoding.py` | Vanetza binary encode/decode for certificates (V1.2.1, default) |
+| `src/encoding.py` | COER encode/decode for certificates (V2.2.1) |
 
 ---
 
@@ -219,93 +228,97 @@ bash
 cd /Users/josephhunt/COIMBRA/C-ITS-PKI  
 uv sync   \# installs dependencies (cryptography library)
 
-#### **Step 2 — Sign a test CAM (if you don't have one already)**
+#### Step 2 - Sign a test CAM (if you don't have one already)
 
-bash  
-\# Initialize PKI and issue an AT (only needed once)  
-python cli.py init \--output pki-output \--algo p256 \--region 65535  
-python cli.py issue-at \--output pki-output \--psid 36,37 \--validity 168
+```bash
+# Initialize PKI and issue an AT (only needed once)
+# Default format is V1.2.1 (vanetza-compatible)
+python3 cli.py init --output pki-output --algo p256 --region 65535
+python3 cli.py issue-at --output pki-output --psid 36,37 --validity 168
 
-\# Create and sign a CAM payload  
-echo \-n "CAM\_PAYLOAD" \> cam.bin
+# Create and sign a CAM payload
+echo -n "CAM_PAYLOAD" > cam.bin
 
-AT\_CERT\=$(ls pki-output/tickets/\*.cert)  
-AT\_KEY\=$(ls pki-output/tickets/\*.key)
+AT_CERT=$(ls pki-output/tickets/*.cert)
+AT_KEY=$(ls pki-output/tickets/*.key | grep sign)
 
-python cli.py sign-cam \\  
-  \--at-key  $AT\_KEY  \\  
-  \--at-cert $AT\_CERT \\  
-  \--payload cam.bin  \\  
-  \--output  cam.signed
+python3 cli.py sign-cam \
+  --at-key  $AT_KEY  \
+  --at-cert $AT_CERT \
+  --payload cam.bin  \
+  --output  cam.signed
+```
 
-#### **Step 3 — Verify the signature with a Python script**
+#### Step 3 - Verify the signature with a Python script
 
 There is no single `verify-cam` CLI command, but `verify_signed_data()` in `signing.py` does the full job. You call it with the AT cert's public key:
 
-python  
-from src.signing import verify\_signed\_data  
-from src.crypto import deserialize\_private\_key, load\_public\_key\_from\_compressed  
-from src.encoding import decode\_certificate  
-from src.types import PublicKeyAlgorithm  
+```python
+from src.signing import verify_signed_data
+from src.crypto import load_public_key_from_compressed
+from src.v1_encoding import decode_certificate_v1   # use for default V1.2.1 format
+from src.types import PublicKeyAlgorithm
 from pathlib import Path
 
-\# Load the AT cert to extract its public key  
-at\_cert\_bytes \= Path("pki-output/tickets/at\_XXXXXXXX.cert").read\_bytes()  
-at\_cert, \_ \= decode\_certificate(at\_cert\_bytes)
+# Load the AT cert to extract its public key
+at_cert_bytes = Path("pki-output/tickets/at_XXXXXXXX.cert").read_bytes()
+at_cert, _ = decode_certificate_v1(at_cert_bytes)  # or decode_certificate() for V2.2.1
 
-vk \= at\_cert.tbs.verify\_key\_indicator  
-pub\_key \= load\_public\_key\_from\_compressed(vk.point.curve, vk.point.compressed)
+vk = at_cert.tbs.verify_key_indicator
+pub_key = load_public_key_from_compressed(vk.point.curve, vk.point.compressed)
 
-\# Load the signed CAM  
-signed\_cam \= Path("cam.signed").read\_bytes()
+# Load the signed CAM
+signed_cam = Path("cam.signed").read_bytes()
 
-\# Verify  
-result \= verify\_signed\_data(  
-    signed\_data\_bytes=signed\_cam,  
-    signer\_pub\_key=pub\_key,  
-    algorithm=PublicKeyAlgorithm.ECDSA\_NIST\_P256,  
+# Verify
+result = verify_signed_data(
+    signed_data_bytes=signed_cam,
+    signer_pub_key=pub_key,
+    algorithm=PublicKeyAlgorithm.ECDSA_NIST_P256,
 )
 
-print(result)  
-\# {'valid': True, 'psid': 36, 'generation\_time\_us': ..., 'signer': {'type': 'digest', ...}, 'payload': b'CAM\_PAYLOAD'}
+print(result)
+# {'valid': True, 'psid': 36, 'generation_time_us': ..., 'signer': {'type': 'digest', ...}, 'payload': b'CAM_PAYLOAD'}
+```
 
 `verify_signed_data()` returns a dict — the key field is `result['valid']` (bool). It also gives you back the PSID, generation time, signer info, and the decrypted inner payload.
 
-#### **Step 4 — Also verify the AT certificate chain**
+#### Step 4 - Also verify the AT certificate chain
 
 The message signature alone isn't sufficient — you also need to confirm the AT cert was legitimately issued. Use `verify_certificate_chain()` from `verification.py`:
 
-python  
-from src.verification import verify\_certificate\_chain  
-from src.encoding import decode\_certificate  
-from src.types import PublicKeyAlgorithm  
+```python
+from src.verification import verify_certificate_chain
+from src.v1_encoding import decode_certificate_v1   # default V1.2.1 format
+from src.types import PublicKeyAlgorithm
 from pathlib import Path
 
-def load\_cert(path):  
-    b \= Path(path).read\_bytes()  
-    cert, \_ \= decode\_certificate(b)  
-    cert.encoded \= b   \# required — hash\_certificate uses cert.encoded  
+def load_cert(path):
+    b = Path(path).read_bytes()
+    cert, _ = decode_certificate_v1(b)  # or decode_certificate() for V2.2.1
+    cert.encoded = b   # required -- hash_certificate uses cert.encoded
     return cert
 
-root \= load\_cert("pki-output/root\_ca.cert")  
-aa   \= load\_cert("pki-output/aa.cert")  
-at   \= load\_cert("pki-output/tickets/at\_XXXXXXXX.cert")
+root = load_cert("pki-output/root_ca.cert")
+aa   = load_cert("pki-output/aa.cert")
+at   = load_cert("pki-output/tickets/at_XXXXXXXX.cert")
 
-chain\_result \= verify\_certificate\_chain(  
-    leaf\_cert=at,  
-    intermediate\_certs=\[aa\],  
-    root\_cert=root,  
-    algorithm=PublicKeyAlgorithm.ECDSA\_NIST\_P256,  
+chain_result = verify_certificate_chain(
+    leaf_cert=at,
+    intermediate_certs=[aa],
+    root_cert=root,
+    algorithm=PublicKeyAlgorithm.ECDSA_NIST_P256,
 )
 
-print(chain\_result\['valid'\])   \# True  
-print(chain\_result\['errors'\])  \# \[\]
+print(chain_result['valid'])   # True
+print(chain_result['errors'])  # []
+```
 
-This validates: Root CA self-signature → Root CA signed the AA → AA signed the AT → all validity periods → issuer digests → cracaId/crlSeries constraints → AT has appPermissions (not certIssuePermissions).
+This validates: Root CA self-signature → Root CA signed the AA → AA signed the AT → all validity periods → issuer digests → AT has appPermissions (not certIssuePermissions).
 
 ---
 
-### **The Digest vs. Full-Cert Distinction**
+### The Digest vs. Full-Cert Distinction
 
 This is the main practical gotcha. When a CAM is signed with `use_digest=True` (the default), the `signer` field in the message is only the 8-byte HashedId8 fingerprint of the AT cert. `verify_signed_data()` **does not resolve the cert from the digest** — it takes the public key as a direct argument. So you must supply the correct AT cert's public key out-of-band.
 
@@ -313,16 +326,18 @@ If you signed with `--full-cert`, the AT cert is embedded in the message itself.
 
 ---
 
-### **What `verify_signed_data()` Actually Does Internally**
+### What `verify_signed_data()` Actually Does Internally
 
-Looking at `signing.py` lines starting at `def verify_signed_data`:
+Looking at `signing.py` starting at `def verify_signed_data`:
 
-1. Strips the outer `Ieee1609Dot2Data` wrapper (version byte \+ content choice=1)  
-2. Reads `hashId` byte  
-3. Marks `tbs_start`, then parses the payload and HeaderInfo to find `tbs_end` — this reconstructs the exact byte range that was signed  
-4. Parses the signer field (digest or certificate)  
-5. Calls `decode_signature()` to get `(r, s)`  
+1. Strips the outer `Ieee1609Dot2Data` wrapper (version byte + content choice=1)
+2. Reads `hashId` byte
+3. Marks `tbs_start`, then parses the payload and HeaderInfo to find `tbs_end` — this reconstructs the exact byte range that was signed
+4. Parses the signer field (digest or certificate)
+5. Calls `decode_signature()` to get `(r, s)`
 6. Calls `ecdsa_verify(public_key, tbs_data, r, s, algorithm)` from `crypto.py`, which re-encodes `(r, s)` into DER format and calls the Python `cryptography` library's ECDSA verifier with SHA-256
 
 The signature is over the raw `tbs_data` bytes — not a hash of them — because `ecdsa_verify` in `crypto.py` passes the raw data to `public_key.verify(..., ECDSA(hashes.SHA256()))`, letting the library do the hashing internally. This avoids the double-hash pitfall.
+
+Note: `EtsiTs103097Data-Signed` message signing always uses the V2.2.1 COER structure for the message envelope, regardless of which certificate encoding format was used to issue the AT. The certificate encoding format (V1.2.1 vanetza or V2.2.1 COER) only affects how the AT certificate bytes are structured, not how the message wrapper is encoded.
 

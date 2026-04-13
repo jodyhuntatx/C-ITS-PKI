@@ -18,7 +18,7 @@ from .types import (
     PsidSsp, PsidGroupPermissions, PublicVerificationKey, PublicEncryptionKey,
     EccPoint, EcdsaSignature, CertificateType, IssuerChoice, CertIdChoice,
     DurationChoice, RegionChoice, PublicKeyAlgorithm, EccP256CurvePointChoice,
-    HashAlgorithm
+    HashAlgorithm, EtsiVersion
 )
 
 
@@ -405,14 +405,15 @@ def decode_verify_key_indicator(data: bytes, offset: int):
 
 # ── ToBeSignedCertificate encoding ────────────────────────────────────────────
 
-def encode_tbs_certificate(tbs: ToBeSignedCertificate) -> bytes:
+def encode_tbs_certificate(tbs: ToBeSignedCertificate,
+                           version: EtsiVersion = EtsiVersion.V2_2_1) -> bytes:
     """
     ToBeSignedCertificate SEQUENCE (IEEE 1609.2 clause 6.4.6).
 
     Mandatory fields (always present):
       id, cracaId, crlSeries, validityPeriod
 
-    Optional fields tracked by a 2-byte presence bitmap (11 optional fields):
+    V2.2.1 (IEEE 1609.2-2022/2025) — 2-byte presence bitmap, 8 optional fields:
       bit 15: region
       bit 14: assuranceLevel
       bit 13: appPermissions
@@ -421,7 +422,16 @@ def encode_tbs_certificate(tbs: ToBeSignedCertificate) -> bytes:
       bit 10: canRequestRollover      (always absent)
       bit  9: encryptionKey
       bit  8: flags                   (always absent)
-      ...remaining bits unused
+
+    V1.2.1 (IEEE 1609.2-2016) — 1-byte presence bitmap, 7 optional fields:
+      bit 7: region
+      bit 6: assuranceLevel
+      bit 5: appPermissions
+      bit 4: certIssuePermissions
+      bit 3: certRequestPermissions   (always absent)
+      bit 2: canRequestRollover       (always absent)
+      bit 1: encryptionKey
+      No ``flags`` field.
 
     verifyKeyIndicator is mandatory (follows after optional fields).
     """
@@ -437,18 +447,31 @@ def encode_tbs_certificate(tbs: ToBeSignedCertificate) -> bytes:
     has_issue    = bool(tbs.cert_issue_permissions)
     has_enc_key  = tbs.encryption_key is not None
 
-    bitmap = 0
-    if has_region:   bitmap |= (1 << 15)
-    if has_assure:   bitmap |= (1 << 14)
-    if has_app:      bitmap |= (1 << 13)
-    if has_issue:    bitmap |= (1 << 12)
-    if has_enc_key:  bitmap |= (1 << 9)
-
     # Mandatory part
-    result  = id_enc + craca + crl_enc + vp_enc
-    # 2-byte bitmap
-    result += bitmap.to_bytes(2, 'big')
-    # Optional fields (in order, only if present)
+    result = id_enc + craca + crl_enc + vp_enc
+
+    if version == EtsiVersion.V1_2_1:
+        # 1-byte bitmap (7 optional fields, IEEE 1609.2-2016)
+        bitmap = 0
+        if has_region:   bitmap |= 0x80  # bit 7
+        if has_assure:   bitmap |= 0x40  # bit 6
+        if has_app:      bitmap |= 0x20  # bit 5
+        if has_issue:    bitmap |= 0x10  # bit 4
+        # bit 3: certRequestPermissions — always absent
+        # bit 2: canRequestRollover     — always absent
+        if has_enc_key:  bitmap |= 0x02  # bit 1
+        result += bytes([bitmap])
+    else:
+        # 2-byte bitmap (8 optional fields, IEEE 1609.2-2022/2025)
+        bitmap = 0
+        if has_region:   bitmap |= (1 << 15)
+        if has_assure:   bitmap |= (1 << 14)
+        if has_app:      bitmap |= (1 << 13)
+        if has_issue:    bitmap |= (1 << 12)
+        if has_enc_key:  bitmap |= (1 << 9)
+        result += bitmap.to_bytes(2, 'big')
+
+    # Optional fields (in order, only if present — same for both versions)
     if has_region:
         result += encode_geographic_region(tbs.region)
     if has_assure:
@@ -470,32 +493,52 @@ def encode_tbs_certificate(tbs: ToBeSignedCertificate) -> bytes:
     return result
 
 
-def decode_tbs_certificate(data: bytes, offset: int):
+def decode_tbs_certificate(data: bytes, offset: int,
+                           version: EtsiVersion = EtsiVersion.V2_2_1):
     """Decode ToBeSignedCertificate. Returns (tbs, offset)."""
     cert_id, offset = decode_certificate_id(data, offset)
     craca_id = data[offset:offset + 3]; offset += 3
     crl_series, offset = decode_uint16(data, offset)
     vp, offset = decode_validity_period(data, offset)
 
-    # 2-byte presence bitmap (11 optional fields)
-    bitmap = int.from_bytes(data[offset:offset + 2], 'big'); offset += 2
-
     region = assurance = app_perms = cert_issue = enc_key = None
 
-    if bitmap & (1 << 15):   # region
-        region, offset = decode_geographic_region(data, offset)
-    if bitmap & (1 << 14):   # assuranceLevel
-        b = data[offset]; offset += 1
-        assurance = SubjectAssurance(level=(b >> 5) & 0x7, confidence=b & 0x03)
-    if bitmap & (1 << 13):   # appPermissions
-        raw, offset = decode_octet_string(data, offset)
-        app_perms = _decode_seq_of_psid_ssp(raw)
-    if bitmap & (1 << 12):   # certIssuePermissions
-        raw, offset = decode_octet_string(data, offset)
-        cert_issue = []   # simplified: raw bytes stored, full decode not required for PKI ops
-    # bits 11, 10: certRequestPermissions, canRequestRollover — always absent
-    if bitmap & (1 << 9):    # encryptionKey
-        enc_key, offset = decode_public_encryption_key(data, offset)
+    if version == EtsiVersion.V1_2_1:
+        # 1-byte presence bitmap (7 optional fields, IEEE 1609.2-2016)
+        bitmap = data[offset]; offset += 1
+        if bitmap & 0x80:   # bit 7: region
+            region, offset = decode_geographic_region(data, offset)
+        if bitmap & 0x40:   # bit 6: assuranceLevel
+            b = data[offset]; offset += 1
+            assurance = SubjectAssurance(level=(b >> 5) & 0x7, confidence=b & 0x03)
+        if bitmap & 0x20:   # bit 5: appPermissions
+            raw, offset = decode_octet_string(data, offset)
+            app_perms = _decode_seq_of_psid_ssp(raw)
+        if bitmap & 0x10:   # bit 4: certIssuePermissions
+            raw, offset = decode_octet_string(data, offset)
+            cert_issue = []
+        # bit 3: certRequestPermissions — always absent
+        # bit 2: canRequestRollover     — always absent
+        if bitmap & 0x02:   # bit 1: encryptionKey
+            enc_key, offset = decode_public_encryption_key(data, offset)
+    else:
+        # 2-byte presence bitmap (8 optional fields, IEEE 1609.2-2022/2025)
+        bitmap = int.from_bytes(data[offset:offset + 2], 'big'); offset += 2
+        if bitmap & (1 << 15):   # region
+            region, offset = decode_geographic_region(data, offset)
+        if bitmap & (1 << 14):   # assuranceLevel
+            b = data[offset]; offset += 1
+            assurance = SubjectAssurance(level=(b >> 5) & 0x7, confidence=b & 0x03)
+        if bitmap & (1 << 13):   # appPermissions
+            raw, offset = decode_octet_string(data, offset)
+            app_perms = _decode_seq_of_psid_ssp(raw)
+        if bitmap & (1 << 12):   # certIssuePermissions
+            raw, offset = decode_octet_string(data, offset)
+            cert_issue = []
+        # bits 11, 10: certRequestPermissions, canRequestRollover — always absent
+        if bitmap & (1 << 9):    # encryptionKey
+            enc_key, offset = decode_public_encryption_key(data, offset)
+        # bit 8: flags — always absent in our implementation
 
     # verifyKeyIndicator (mandatory)
     vki, offset = decode_verify_key_indicator(data, offset)
@@ -541,7 +584,8 @@ def _decode_seq_of_psid_ssp(raw: bytes) -> list:
 
 # ── Certificate encoding ──────────────────────────────────────────────────────
 
-def encode_certificate(cert: Certificate) -> bytes:
+def encode_certificate(cert: Certificate,
+                       version: EtsiVersion = EtsiVersion.V2_2_1) -> bytes:
     """
     EtsiTs103097Certificate (IEEE 1609.2 clause 6.4.2):
     Certificate ::= SEQUENCE {
@@ -552,11 +596,12 @@ def encode_certificate(cert: Certificate) -> bytes:
       signature  Signature OPTIONAL
     }
     The single optional field (signature) is indicated by a 1-byte bitmap.
+    The ``version`` parameter controls the TBS bitmap width (see encode_tbs_certificate).
     """
     version_enc = encode_uint8(cert.version)
     type_enc    = encode_enumerated(int(cert.cert_type))
     issuer_enc  = encode_issuer_identifier(cert.issuer)
-    tbs_enc     = encode_tbs_certificate(cert.tbs)
+    tbs_enc     = encode_tbs_certificate(cert.tbs, version=version)
 
     has_sig  = cert.signature is not None
     bitmap   = bytes([0x80]) if has_sig else bytes([0x00])
@@ -565,15 +610,21 @@ def encode_certificate(cert: Certificate) -> bytes:
     return version_enc + type_enc + issuer_enc + tbs_enc + bitmap + sig_enc
 
 
-def decode_certificate(data: bytes, offset: int = 0):
-    """Decode an EtsiTs103097Certificate from COER bytes. Returns (cert, offset)."""
-    version, offset    = decode_uint8(data, offset)
+def decode_certificate(data: bytes, offset: int = 0,
+                       version: EtsiVersion = EtsiVersion.V2_2_1):
+    """
+    Decode an EtsiTs103097Certificate from COER bytes. Returns (cert, offset).
+
+    The ``version`` parameter must match the standard version that was used to
+    encode the certificate so that the correct TBS bitmap width is applied.
+    """
+    cert_version, offset  = decode_uint8(data, offset)
     cert_type_raw, offset = decode_uint8(data, offset)    # ENUMERATED encoded as Uint8
-    cert_type          = CertificateType(cert_type_raw)
-    issuer, offset     = decode_issuer_identifier(data, offset)
-    tbs_start          = offset
-    tbs, offset        = decode_tbs_certificate(data, offset)
-    tbs_end            = offset
+    cert_type             = CertificateType(cert_type_raw)
+    issuer, offset        = decode_issuer_identifier(data, offset)
+    tbs_start             = offset
+    tbs, offset           = decode_tbs_certificate(data, offset, version=version)
+    tbs_end               = offset
 
     # 1-byte presence bitmap for the optional signature field
     sig = None
@@ -583,7 +634,7 @@ def decode_certificate(data: bytes, offset: int = 0):
             sig, offset = decode_signature(data, offset)
 
     cert = Certificate(
-        version=version,
+        version=cert_version,
         cert_type=cert_type,
         issuer=issuer,
         tbs=tbs,

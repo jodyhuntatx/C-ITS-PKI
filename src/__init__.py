@@ -1,1 +1,1 @@
-"""C-ITS PKI Implementation conforming to ETSI TS 103 097 V2.2.1"""
+"""C-ITS PKI Implementation — supports ETSI TS 103 097 V1.2.1 and V2.2.1"""

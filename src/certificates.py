@@ -1,6 +1,7 @@
 """
 Certificate issuance for C-ITS PKI entities.
-Implements security profiles from ETSI TS 103 097 V2.2.1 clause 7.2.
+Implements security profiles from ETSI TS 103 097 V2.2.1 (clause 9) and
+ETSI TS 103 097 V1.2.1 (clause 7) / vanetza v2 format.
 """
 import time
 from typing import Optional
@@ -11,11 +12,14 @@ from .types import (
     PsidSsp, PsidGroupPermissions, PublicVerificationKey, PublicEncryptionKey,
     EcdsaSignature, CertificateType, IssuerChoice, CertIdChoice,
     DurationChoice, RegionChoice, PublicKeyAlgorithm, HashAlgorithm, ItsAid,
-    unix_to_its_time32
+    EtsiVersion, unix_to_its_time32
 )
 from .encoding import encode_certificate, encode_tbs_certificate
 from .crypto import (
     generate_keypair, ecdsa_sign, hash_certificate, public_key_to_point
+)
+from .v1_encoding import (
+    build_and_sign_v1, hash_certificate_v1, V1SubjectType
 )
 
 
@@ -26,6 +30,18 @@ CRL_SERIES = 0                  # crlSeries = 0 (FR-CI-10)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _hash_cert(cert, algorithm: PublicKeyAlgorithm, version: EtsiVersion) -> bytes:
+    """
+    Return the HashedId8 of a certificate, selecting the correct hash function
+    based on encoding format.
+    V1_2_1 (vanetza): always SHA-256, last 8 bytes of full encoded cert.
+    V2_2_1 (COER):    SHA-256 or SHA-384 depending on algorithm, last 8 bytes.
+    """
+    if version == EtsiVersion.V1_2_1:
+        return hash_certificate_v1(cert.encoded)
+    return hash_certificate(cert.encoded, algorithm)
+
 
 def _all_permissions() -> list:
     """
@@ -52,31 +68,53 @@ def _build_and_sign(tbs: ToBeSignedCertificate,
                     cert_type: CertificateType,
                     issuer: IssuerIdentifier,
                     signing_priv_key,
-                    algorithm: PublicKeyAlgorithm) -> Certificate:
+                    algorithm: PublicKeyAlgorithm,
+                    version: EtsiVersion = EtsiVersion.V1_2_1,
+                    subject_type: int = V1SubjectType.ROOT_CA,
+                    psids=None) -> Certificate:
     """
     Encode the ToBeSignedCertificate, sign it, build the full Certificate,
-    and cache both tbs_encoded and the full COER-encoded certificate.
+    and cache both tbs_encoded and the full encoded certificate.
+
+    ``version`` selects the encoding format:
+      V1_2_1 → vanetza-compatible binary format (ETSI TS 103 097 V1.2.1 / vanetza v2)
+      V2_2_1 → COER format (ETSI TS 103 097 V2.2.1 / IEEE 1609.2-2022)
+
+    ``subject_type`` is only used for V1_2_1 (vanetza SubjectType enum value).
+    ``psids``        is only used for V1_2_1 (overrides tbs.app_permissions).
     """
-    # Encode TBS
-    tbs_encoded = encode_tbs_certificate(tbs)
+    if version == EtsiVersion.V1_2_1:
+        # Vanetza-compatible binary format
+        return build_and_sign_v1(
+            tbs=tbs,
+            issuer=issuer,
+            sign_priv_key=signing_priv_key,
+            algorithm=algorithm,
+            subject_type=subject_type,
+            psids=psids,
+        )
+    else:
+        # COER format (V2.2.1)
+        # Encode TBS with the 2-byte optional-field bitmap
+        tbs_encoded = encode_tbs_certificate(tbs, version=version)
 
-    # ECDSA sign the TBS encoding
-    r, s = ecdsa_sign(signing_priv_key, tbs_encoded, algorithm)
-    signature = EcdsaSignature(r=r, s=s, algorithm=algorithm)
+        # ECDSA sign the TBS encoding
+        r, s = ecdsa_sign(signing_priv_key, tbs_encoded, algorithm)
+        signature = EcdsaSignature(r=r, s=s, algorithm=algorithm)
 
-    # Assemble Certificate
-    cert = Certificate(
-        version=3,
-        cert_type=cert_type,
-        issuer=issuer,
-        tbs=tbs,
-        signature=signature,
-    )
-    cert.tbs_encoded = tbs_encoded
+        # Assemble Certificate
+        cert = Certificate(
+            version=3,
+            cert_type=cert_type,
+            issuer=issuer,
+            tbs=tbs,
+            signature=signature,
+        )
+        cert.tbs_encoded = tbs_encoded
 
-    # Encode and cache the full certificate
-    cert.encoded = encode_certificate(cert)
-    return cert
+        # Encode and cache the full COER certificate
+        cert.encoded = encode_certificate(cert, version=version)
+        return cert
 
 
 # ── Profile 9.1 — Root CA Certificate ────────────────────────────────────────
@@ -89,9 +127,13 @@ def issue_root_ca_certificate(
     validity_years:  int = 10,
     region_ids:      Optional[list] = None,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> Certificate:
     """
-    Self-signed Root CA certificate per ETSI TS 103 097 V2.2.1 profile 9.1.
+    Self-signed Root CA certificate.
+
+    V2.2.1: profile 9.1  (ETSI TS 103 097 V2.2.1)
+    V1.2.1: profile 7.1  (ETSI TS 103 097 V1.2.1)
 
     Constraints:
       - issuer = self
@@ -125,10 +167,11 @@ def issue_root_ca_certificate(
         else HashAlgorithm.SHA384
     issuer = IssuerIdentifier(choice=IssuerChoice.SELF, hash_alg=hash_alg)
 
-    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, sign_priv_key, algorithm)
+    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, sign_priv_key, algorithm,
+                           version=version, subject_type=V1SubjectType.ROOT_CA)
 
 
-# ── Profile 9.2 — Enrolment Authority (EA) Certificate ───────────────────────
+# ── Profile 9.2 / 7.2 — Enrolment Authority (EA) Certificate ─────────────────
 
 def issue_ea_certificate(
     name: str,
@@ -141,9 +184,13 @@ def issue_ea_certificate(
     validity_years:  int = 5,
     region_ids:      Optional[list] = None,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> Certificate:
     """
-    EA subordinate CA certificate per ETSI TS 103 097 V2.2.1 profile 9.2.
+    EA subordinate CA certificate.
+
+    V2.2.1: profile 9.2  (ETSI TS 103 097 V2.2.1)
+    V1.2.1: profile 7.2  (ETSI TS 103 097 V1.2.1)
 
     Constraints:
       - issuer = sha256AndDigest/sha384AndDigest of Root CA
@@ -170,16 +217,17 @@ def issue_ea_certificate(
         verify_key_indicator=vk,
     )
 
-    root_hash = hash_certificate(root_ca_cert.encoded, sign_algorithm)
+    root_hash = _hash_cert(root_ca_cert, sign_algorithm, version)
     if sign_algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=root_hash)
     else:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=root_hash)
 
-    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, root_ca_priv_key, sign_algorithm)
+    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, root_ca_priv_key, sign_algorithm,
+                           version=version, subject_type=V1SubjectType.ENROLLMENT_AUTHORITY)
 
 
-# ── Profile 9.3 — Authorization Authority (AA) Certificate ───────────────────
+# ── Profile 9.3 / 7.3 — Authorization Authority (AA) Certificate ─────────────
 
 def issue_aa_certificate(
     name: str,
@@ -192,9 +240,13 @@ def issue_aa_certificate(
     validity_years:  int = 5,
     region_ids:      Optional[list] = None,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> Certificate:
     """
-    AA subordinate CA certificate per ETSI TS 103 097 V2.2.1 profile 9.3.
+    AA subordinate CA certificate.
+
+    V2.2.1: profile 9.3  (ETSI TS 103 097 V2.2.1)
+    V1.2.1: profile 7.3  (ETSI TS 103 097 V1.2.1)
 
     Constraints:
       - issuer = digest of Root CA
@@ -221,16 +273,17 @@ def issue_aa_certificate(
         verify_key_indicator=vk,
     )
 
-    root_hash = hash_certificate(root_ca_cert.encoded, sign_algorithm)
+    root_hash = _hash_cert(root_ca_cert, sign_algorithm, version)
     if sign_algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=root_hash)
     else:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=root_hash)
 
-    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, root_ca_priv_key, sign_algorithm)
+    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, root_ca_priv_key, sign_algorithm,
+                           version=version, subject_type=V1SubjectType.AUTHORIZATION_AUTHORITY)
 
 
-# ── Profile 9.4 — Trust List Manager (TLM) Certificate ───────────────────────
+# ── Profile 9.4 / 7.4 — Trust List Manager (TLM) Certificate ─────────────────
 
 def issue_tlm_certificate(
     name: str,
@@ -238,9 +291,13 @@ def issue_tlm_certificate(
     algorithm:       PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256,
     validity_years:  int = 10,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> Certificate:
     """
-    Self-signed TLM certificate per ETSI TS 103 097 V2.2.1 profile 9.4.
+    Self-signed TLM certificate.
+
+    V2.2.1: profile 9.4  (ETSI TS 103 097 V2.2.1)
+    V1.2.1: profile 7.4  (ETSI TS 103 097 V1.2.1)
 
     Constraints:
       - issuer = self
@@ -267,10 +324,11 @@ def issue_tlm_certificate(
         else HashAlgorithm.SHA384
     issuer = IssuerIdentifier(choice=IssuerChoice.SELF, hash_alg=hash_alg)
 
-    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, tlm_sign_priv_key, algorithm)
+    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, tlm_sign_priv_key, algorithm,
+                           version=version, subject_type=V1SubjectType.ROOT_CA)
 
 
-# ── Profile 9.5 — Enrolment Credential (EC) ──────────────────────────────────
+# ── Profile 9.5 / 7.5 — Enrolment Credential (EC) ───────────────────────────
 
 def issue_enrolment_credential(
     name: str,
@@ -281,9 +339,13 @@ def issue_enrolment_credential(
     validity_years:  int = 1,
     region_ids:      Optional[list] = None,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> Certificate:
     """
-    Enrolment Credential per ETSI TS 103 097 V2.2.1 profile 9.5.
+    Enrolment Credential.
+
+    V2.2.1: profile 9.5  (ETSI TS 103 097 V2.2.1)
+    V1.2.1: profile 7.5  (ETSI TS 103 097 V1.2.1)
 
     Constraints:
       - issuer = digest of EA certificate
@@ -310,16 +372,17 @@ def issue_enrolment_credential(
         verify_key_indicator=vk,
     )
 
-    ea_hash = hash_certificate(ea_cert.encoded, sign_algorithm)
+    ea_hash = _hash_cert(ea_cert, sign_algorithm, version)
     if sign_algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=ea_hash)
     else:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=ea_hash)
 
-    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, ea_priv_key, sign_algorithm)
+    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, ea_priv_key, sign_algorithm,
+                           version=version, subject_type=V1SubjectType.ENROLLMENT_CREDENTIAL)
 
 
-# ── Profile 9.6 — Authorization Ticket (AT) ──────────────────────────────────
+# ── Profile 9.6 / 7.6 — Authorization Ticket (AT) ───────────────────────────
 
 def issue_authorization_ticket(
     its_sign_priv_key, its_sign_pub_key,
@@ -330,9 +393,13 @@ def issue_authorization_ticket(
     validity_hours:  int = 168,   # 1 week
     region_ids:      Optional[list] = None,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> Certificate:
     """
-    Authorization Ticket per ETSI TS 103 097 V2.2.1 profile 9.6.
+    Authorization Ticket.
+
+    V2.2.1: profile 9.6  (ETSI TS 103 097 V2.2.1)
+    V1.2.1: profile 7.6  (ETSI TS 103 097 V1.2.1)
 
     Constraints:
       - issuer = digest of AA certificate
@@ -364,15 +431,16 @@ def issue_authorization_ticket(
         verify_key_indicator=vk,
     )
 
-    aa_hash = hash_certificate(aa_cert.encoded, sign_algorithm)
+    aa_hash = _hash_cert(aa_cert, sign_algorithm, version)
     if sign_algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=aa_hash)
     else:
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=aa_hash)
 
-    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key, sign_algorithm)
+    return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key, sign_algorithm,
+                           version=version, subject_type=V1SubjectType.AUTHORIZATION_TICKET)
 
-# ── Profile 9.6 (BKE variant) — Butterfly AT batch issuance ──────────────────
+# ── Profile 9.6 / 7.6 (BKE variant) — Butterfly AT batch issuance ───────────
 
 def issue_butterfly_authorization_tickets(
     caterpillar_sign_pub,
@@ -384,6 +452,7 @@ def issue_butterfly_authorization_tickets(
     validity_hours:  int = 168,
     region_ids:      Optional[list] = None,
     start_time:      Optional[float] = None,
+    version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> list:
     """
     Issue a batch of AT certificates via Butterfly Key Expansion.
@@ -399,7 +468,7 @@ def issue_butterfly_authorization_tickets(
         PsidSsp(psid=int(ItsAid.CAM)),
         PsidSsp(psid=int(ItsAid.DENM)),
     ]
-    aa_hash = hash_certificate(aa_cert.encoded, sign_algorithm)
+    aa_hash = _hash_cert(aa_cert, sign_algorithm, version)
     issuer = (
         IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=aa_hash)
         if sign_algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256
@@ -423,5 +492,7 @@ def issue_butterfly_authorization_tickets(
             encryption_key=None,
             verify_key_indicator=vk,
         )
-        tickets.append(_build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key, sign_algorithm))
+        tickets.append(_build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key,
+                                        sign_algorithm, version=version,
+                                        subject_type=V1SubjectType.AUTHORIZATION_TICKET))
     return tickets

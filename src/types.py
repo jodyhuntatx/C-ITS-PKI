@@ -1,6 +1,6 @@
 """
 Data structure definitions for C-ITS PKI conforming to ETSI TS 103 097 V2.2.1
-and IEEE Std 1609.2-2025.
+and IEEE Std 1609.2-2025.  Also supports ETSI TS 103 097 V1.2.1 / IEEE 1609.2-2016.
 """
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -39,6 +39,26 @@ class ItsAid(IntEnum):
     CRL = 622        # Certificate Revocation List
     CERT_REQUEST = 623  # Secure Certificate Request
     MDM = 637        # Misbehaviour Detection Management
+
+
+# ── ETSI TS 103 097 standard version ─────────────────────────────────────────
+
+class EtsiVersion(IntEnum):
+    """
+    ETSI TS 103 097 standard version selector.
+
+    Controls the ToBeSignedCertificate optional-field bitmap width and the
+    presence of fields introduced in later IEEE 1609.2 revisions:
+
+      V1_2_1 — ETSI TS 103 097 V1.2.1 (2015), based on IEEE 1609.2-2016.
+               7 optional TBS fields → 1-byte presence bitmap.
+               No ``flags`` field.
+
+      V2_2_1 — ETSI TS 103 097 V2.2.1 (2021), based on IEEE 1609.2-2022/2025.
+               8 optional TBS fields (adds ``flags``) → 2-byte presence bitmap.
+    """
+    V1_2_1 = 1
+    V2_2_1 = 2
 
 
 # ── Hash algorithms ───────────────────────────────────────────────────────────

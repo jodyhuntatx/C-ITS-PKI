@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from .types import PublicKeyAlgorithm, ItsAid, PsidSsp, KeyPair
+from .types import PublicKeyAlgorithm, ItsAid, PsidSsp, KeyPair, EtsiVersion
 from .crypto import (
     generate_keypair, serialize_private_key, deserialize_private_key,
     hash_certificate, random_bytes
@@ -48,17 +48,22 @@ class CITSPKI:
 
     def __init__(self,
                  algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256,
-                 region_ids: Optional[list] = None):
+                 region_ids: Optional[list] = None,
+                 version: EtsiVersion = EtsiVersion.V1_2_1):
         """
         Args:
-            algorithm: Default signing algorithm (P-256 or P-384).
+            algorithm:  Default signing algorithm (P-256 or P-384).
             region_ids: List of geographic region IDs. Use [65535] for EU-27.
+            version:    ETSI TS 103 097 standard version to use when encoding
+                        certificates (V1_2_1 or V2_2_1).  Controls the width of
+                        the ToBeSignedCertificate optional-field bitmap.
         """
         self.algorithm = algorithm
         self.enc_algorithm = (PublicKeyAlgorithm.ECIES_NIST_P256
                               if algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256
                               else PublicKeyAlgorithm.ECIES_NIST_P384)
         self.region_ids = region_ids
+        self.version = version
 
         self.root_ca: Optional[PKIEntity] = None
         self.tlm: Optional[PKIEntity] = None
@@ -97,6 +102,7 @@ class CITSPKI:
             validity_years=root_validity_years,
             region_ids=self.region_ids,
             start_time=t,
+            version=self.version,
         )
         self.root_ca = PKIEntity(
             name=root_ca_name,
@@ -118,6 +124,7 @@ class CITSPKI:
             algorithm=self.algorithm,
             validity_years=tlm_validity_years,
             start_time=t,
+            version=self.version,
         )
         self.tlm = PKIEntity(
             name=tlm_name,
@@ -145,6 +152,7 @@ class CITSPKI:
             validity_years=ea_validity_years,
             region_ids=self.region_ids,
             start_time=t,
+            version=self.version,
         )
         self.ea = PKIEntity(
             name=ea_name,
@@ -174,6 +182,7 @@ class CITSPKI:
             validity_years=aa_validity_years,
             region_ids=self.region_ids,
             start_time=t,
+            version=self.version,
         )
         self.aa = PKIEntity(
             name=aa_name,
@@ -222,6 +231,7 @@ class CITSPKI:
             validity_hours=validity_hours,
             region_ids=region_ids or self.region_ids,
             start_time=start_time,
+            version=self.version,
         )
         results = []
         for cert, e_i in zip(at_certs, expansion_values):
@@ -265,6 +275,7 @@ class CITSPKI:
             validity_years=validity_years,
             region_ids=region_ids or self.region_ids,
             start_time=t,
+            version=self.version,
         )
 
         return {
@@ -309,6 +320,7 @@ class CITSPKI:
             validity_hours=validity_hours,
             region_ids=region_ids or self.region_ids,
             start_time=t,
+            version=self.version,
         )
 
         return {
@@ -350,9 +362,13 @@ class CITSPKI:
                 enc_key_path.write_bytes(serialize_private_key(entity.enc_priv_key))
 
         # Save metadata
+        # 'etsi_version' stores the ETSI TS 103 097 standard version as an integer
+        # (1 = V1.2.1 with 1-byte TBS bitmap, 2 = V2.2.1 with 2-byte TBS bitmap).
+        # This is distinct from cert.version which is always 3 (IEEE 1609.2 format version).
         meta = {
             'algorithm': int(self.algorithm),
             'region_ids': self.region_ids,
+            'etsi_version': int(self.version),
             'entities': [k for k, v in entities.items() if v is not None],
         }
         (out / 'pki_meta.json').write_text(json.dumps(meta, indent=2))

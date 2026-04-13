@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 C-ITS PKI Command-Line Interface
-Conforming to ETSI TS 103 097 V2.2.1 / IEEE Std 1609.2-2025.
+Supports ETSI TS 103 097 V1.2.1 and V2.2.1 / IEEE Std 1609.2-2025.
 
 Usage:
     python cli.py init        [--output DIR] [--algo p256|p384] [--region 65535]
+                              [--etsi-version v1|v2]
     python cli.py enrol       --output DIR --name ITS_NAME [--ec-validity 1]
     python cli.py issue-at    --output DIR [--psid 36,37] [--at-validity 168] [--at-output DIR]
     python cli.py butterfly-at --output DIR [--count 8] [--psid 36,37] [--at-validity 168]
@@ -27,7 +28,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 def main():
     parser = argparse.ArgumentParser(
-        description='C-ITS PKI — ETSI TS 103 097 V2.2.1 Certificate Management',
+        description='C-ITS PKI - ETSI TS 103 097 V1.2.1 / V2.2.1 Certificate Management',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = parser.add_subparsers(dest='command', required=True)
@@ -37,6 +38,11 @@ def main():
     p_init.add_argument('--output', '-o', default='pki-output', help='Output directory')
     p_init.add_argument('--algo', choices=['p256', 'p384'], default='p256')
     p_init.add_argument('--region', default='65535', help='Comma-separated region IDs (65535=EU-27)')
+    p_init.add_argument('--etsi-version', choices=['v1', 'v2'], default='v1',
+                        dest='etsi_version',
+                        help='ETSI TS 103 097 standard version: '
+                             'v1 = V1.2.1 vanetza-compatible binary format [default], '
+                             'v2 = V2.2.1 COER format (IEEE 1609.2-2022/2025)')
     p_init.add_argument('--root-name', default='C-ITS-Root-CA')
     p_init.add_argument('--tlm-name', default='C-ITS-TLM')
     p_init.add_argument('--ea-name', default='C-ITS-EA')
@@ -87,22 +93,30 @@ def main():
     p_vcam.add_argument('--signed', required=True,
                         help='Signed C-ITS message file (EtsiTs103097Data-Signed, COER)')
     p_vcam.add_argument('--at-cert', required=True,
-                        help='AT certificate used to sign the C-ITS message file (COER)')
+                        help='AT certificate used to sign the C-ITS message file')
     p_vcam.add_argument('--root', default=None,
-                        help='Root CA certificate for chain verification (COER)')
+                        help='Root CA certificate for chain verification')
     p_vcam.add_argument('--aa', default=None,
-                        help='AA certificate for chain verification (COER)')
+                        help='AA certificate for chain verification')
+    p_vcam.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+                        dest='etsi_version',
+                        help='ETSI TS 103 097 version of the certificate files '
+                             '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
     
     # encrypt
     p_enc = sub.add_parser('encrypt', help='Encrypt a payload for a recipient')
-    p_enc.add_argument('--enc-cert', required=True, help='Recipient certificate (COER)')
+    p_enc.add_argument('--enc-cert', required=True, help='Recipient certificate')
     p_enc.add_argument('--enc-key', required=True, help='Recipient encryption private key (PEM)')
     p_enc.add_argument('--payload', required=True)
     p_enc.add_argument('--output', '-o')
+    p_enc.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+                       dest='etsi_version',
+                       help='ETSI TS 103 097 version of the certificate '
+                            '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
 
     # decrypt
     p_dec = sub.add_parser('decrypt', help='Decrypt an encrypted message')
-    p_dec.add_argument('--enc-cert', required=True, help='Your certificate (COER)')
+    p_dec.add_argument('--enc-cert', required=True, help='Your certificate')
     p_dec.add_argument('--enc-key', required=True, help='Your encryption private key (PEM)')
     p_dec.add_argument('--input', '-i', required=True, help='Encrypted message file')
     p_dec.add_argument('--output', '-o')
@@ -112,10 +126,18 @@ def main():
     p_ver.add_argument('--cert', required=True)
     p_ver.add_argument('--issuer', help='Issuer certificate (omit for self-signed)')
     p_ver.add_argument('--root', help='Root CA certificate')
+    p_ver.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+                       dest='etsi_version',
+                       help='ETSI TS 103 097 version used to encode the certificate '
+                            '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
 
     # info
     p_info = sub.add_parser('info', help='Display certificate information')
     p_info.add_argument('--cert', required=True)
+    p_info.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+                        dest='etsi_version',
+                        help='ETSI TS 103 097 version used to encode the certificate '
+                             '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
 
     args = parser.parse_args()
 
@@ -134,10 +156,42 @@ def main():
     }
     dispatch[args.command](args)
 
+def _detect_version_from_cert_path(cert_path: Path, explicit_version: str = None) -> str:
+    """
+    Determine the ETSI version string ('v1' or 'v2') to use for decoding a cert.
+
+    Priority:
+      1. Explicit --etsi-version argument (if supplied).
+      2. pki_meta.json found in the cert's directory or up to 3 parent directories.
+      3. Default: 'v1' (vanetza-compatible format).
+    """
+    if explicit_version is not None:
+        return explicit_version
+
+    # Walk up directory tree looking for pki_meta.json
+    search = cert_path.resolve().parent
+    for _ in range(4):
+        meta_path = search / 'pki_meta.json'
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+                ev = meta.get('etsi_version')
+                if ev is not None:
+                    return 'v1' if int(ev) == 1 else 'v2'
+            except Exception:
+                pass
+        parent = search.parent
+        if parent == search:
+            break
+        search = parent
+
+    return 'v1'   # default to vanetza-compatible format
+
+
 def _get_pki(output_dir: str):
-    """Load or initialise a PKI from the given directory."""
+    """Load PKI metadata from the given directory and return a configured CITSPKI."""
     from src.pki import CITSPKI
-    from src.types import PublicKeyAlgorithm
+    from src.types import PublicKeyAlgorithm, EtsiVersion
 
     meta_path = Path(output_dir) / 'pki_meta.json'
     if not meta_path.exists():
@@ -145,19 +199,23 @@ def _get_pki(output_dir: str):
 
     meta = json.loads(meta_path.read_text())
     algo = PublicKeyAlgorithm(meta['algorithm'])
-    pki = CITSPKI(algorithm=algo, region_ids=meta.get('region_ids'))
+    # Read ETSI standard version; fall back to V1_2_1 (vanetza format) for
+    # pki_meta.json files that predate this field.
+    ver = EtsiVersion(meta.get('etsi_version', int(EtsiVersion.V1_2_1)))
+    pki = CITSPKI(algorithm=algo, region_ids=meta.get('region_ids'), version=ver)
     return pki
 
 
 def cmd_init(args):
     """Initialise the PKI hierarchy."""
     from src.pki import CITSPKI
-    from src.types import PublicKeyAlgorithm
+    from src.types import PublicKeyAlgorithm, EtsiVersion
 
     algo = PublicKeyAlgorithm.ECDSA_NIST_P256 if args.algo == 'p256' else PublicKeyAlgorithm.ECDSA_NIST_P384
     region_ids = [int(r) for r in args.region.split(',')] if args.region else None
+    ver = EtsiVersion.V1_2_1 if args.etsi_version == 'v1' else EtsiVersion.V2_2_1
 
-    pki = CITSPKI(algorithm=algo, region_ids=region_ids)
+    pki = CITSPKI(algorithm=algo, region_ids=region_ids, version=ver)
     certs = pki.initialise(
         root_ca_name=args.root_name,
         tlm_name=args.tlm_name,
@@ -166,7 +224,8 @@ def cmd_init(args):
     )
     pki.save(args.output)
 
-    print(f"\n[OK] PKI initialised in '{args.output}'")
+    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V2.2.1'
+    print(f"\n[OK] PKI initialised in '{args.output}' (ETSI TS 103 097 {ver_label})")
     print(f"     Root CA  : {len(certs['root_ca'])} bytes")
     print(f"     TLM      : {len(certs['tlm'])} bytes")
     print(f"     EA       : {len(certs['ea'])} bytes")
@@ -176,7 +235,7 @@ def cmd_init(args):
 def cmd_enrol(args):
     """Enrol an ITS-Station and issue an Enrolment Credential."""
     from src.pki import CITSPKI
-    from src.types import PublicKeyAlgorithm
+    from src.types import PublicKeyAlgorithm, EtsiVersion
     from src.crypto import (
         generate_keypair, serialize_private_key, deserialize_private_key
     )
@@ -191,17 +250,30 @@ def cmd_enrol(args):
 
     meta = json.loads(meta_path.read_text())
     algo = PublicKeyAlgorithm(meta['algorithm'])
+    ver = EtsiVersion(meta.get('etsi_version', int(EtsiVersion.V1_2_1)))
 
-    # Load EA certificate and private key
+    # Load EA certificate bytes and private key.
+    # We only need ea_cert.encoded for hashing (to compute the issuer digest);
+    # full decoding is not required.
     ea_cert_bytes = (out_dir / 'ea.cert').read_bytes()
     ea_priv_pem = (out_dir / 'ea_sign.key').read_bytes()
 
-    from src.encoding import decode_certificate
-    ea_cert, _ = decode_certificate(ea_cert_bytes)
-    ea_priv_key = deserialize_private_key(ea_priv_pem)
-
-    # Set ea_cert.encoded so hash_certificate works
+    from src.types import (
+        Certificate, CertificateType, IssuerIdentifier, ToBeSignedCertificate,
+        CertificateId, ValidityPeriod, Duration, IssuerChoice, CertIdChoice, DurationChoice
+    )
+    dummy_vp  = ValidityPeriod(start=0, duration=Duration(DurationChoice.YEARS, 1))
+    dummy_tbs = ToBeSignedCertificate(
+        id=CertificateId(CertIdChoice.NONE), craca_id=b'\x00\x00\x00',
+        crl_series=0, validity_period=dummy_vp,
+    )
+    ea_cert = Certificate(
+        version=2, cert_type=CertificateType.EXPLICIT,
+        issuer=IssuerIdentifier(IssuerChoice.SELF), tbs=dummy_tbs,
+    )
     ea_cert.encoded = ea_cert_bytes
+
+    ea_priv_key = deserialize_private_key(ea_priv_pem)
 
     its_sign_priv, its_sign_pub = generate_keypair(algo)
     ec = issue_enrolment_credential(
@@ -212,6 +284,7 @@ def cmd_enrol(args):
         ea_priv_key=ea_priv_key,
         sign_algorithm=algo,
         validity_years=args.validity,
+        version=ver,
     )
 
     # Save
@@ -227,22 +300,37 @@ def cmd_enrol(args):
 
 def cmd_issue_at(args):
     """Issue an Authorization Ticket."""
-    from src.types import PublicKeyAlgorithm, PsidSsp
+    from src.types import PublicKeyAlgorithm, PsidSsp, EtsiVersion
     from src.crypto import (
         generate_keypair, serialize_private_key, deserialize_private_key
     )
     from src.certificates import issue_authorization_ticket
-    from src.encoding import decode_certificate
     import json
 
     out_dir = Path(args.output)
     meta = json.loads((out_dir / 'pki_meta.json').read_text())
     algo = PublicKeyAlgorithm(meta['algorithm'])
+    ver = EtsiVersion(meta.get('etsi_version', int(EtsiVersion.V1_2_1)))
 
     aa_cert_bytes = (out_dir / 'aa.cert').read_bytes()
     aa_priv_pem = (out_dir / 'aa_sign.key').read_bytes()
-    aa_cert, _ = decode_certificate(aa_cert_bytes)
+
+    # We only need aa_cert.encoded for hashing (issuer digest); skip full decode.
+    from src.types import (
+        Certificate, CertificateType, IssuerIdentifier, ToBeSignedCertificate,
+        CertificateId, ValidityPeriod, Duration, IssuerChoice, CertIdChoice, DurationChoice
+    )
+    dummy_vp  = ValidityPeriod(start=0, duration=Duration(DurationChoice.YEARS, 1))
+    dummy_tbs = ToBeSignedCertificate(
+        id=CertificateId(CertIdChoice.NONE), craca_id=b'\x00\x00\x00',
+        crl_series=0, validity_period=dummy_vp,
+    )
+    aa_cert = Certificate(
+        version=2, cert_type=CertificateType.EXPLICIT,
+        issuer=IssuerIdentifier(IssuerChoice.SELF), tbs=dummy_tbs,
+    )
     aa_cert.encoded = aa_cert_bytes
+
     aa_priv_key = deserialize_private_key(aa_priv_pem)
 
     psids = [PsidSsp(psid=int(p)) for p in args.psid.split(',')] if args.psid else None
@@ -256,6 +344,7 @@ def cmd_issue_at(args):
         app_psids=psids,
         sign_algorithm=algo,
         validity_hours=args.validity,
+        version=ver,
     )
 
     at_dir = Path(args.at_output or out_dir / 'tickets')
@@ -271,7 +360,7 @@ def cmd_issue_at(args):
     print(f"     Private key    : {at_key_path}")
 
 def cmd_butterfly_at(args):
-    from src.types import PublicKeyAlgorithm, PsidSsp
+    from src.types import PublicKeyAlgorithm, PsidSsp, EtsiVersion
     from src.crypto import generate_keypair, serialize_private_key, deserialize_private_key, random_bytes, bke_expand_private_key
     from src.certificates import issue_butterfly_authorization_tickets
     from src.encoding import decode_certificate
@@ -281,10 +370,22 @@ def cmd_butterfly_at(args):
     out_dir = Path(args.output)
     meta = json.loads((out_dir / 'pki_meta.json').read_text())
     algo = PublicKeyAlgorithm(meta['algorithm'])
+    ver = EtsiVersion(meta.get('etsi_version', int(EtsiVersion.V1_2_1)))
     aa_cert_bytes = (out_dir / 'aa.cert').read_bytes()
     aa_priv_pem   = (out_dir / 'aa_sign.key').read_bytes()
-    aa_cert, _ = decode_certificate(aa_cert_bytes)
+
+    # We only need aa_cert.encoded for hashing (issuer digest); skip full decode.
+    from src.types import (
+        Certificate as _Cert, CertificateType as _CT, IssuerIdentifier as _II,
+        ToBeSignedCertificate as _TBS, CertificateId as _CID,
+        ValidityPeriod as _VP, Duration as _Dur,
+        IssuerChoice as _IC, CertIdChoice as _CIC, DurationChoice as _DC
+    )
+    _dummy_vp  = _VP(start=0, duration=_Dur(_DC.YEARS, 1))
+    _dummy_tbs = _TBS(id=_CID(_CIC.NONE), craca_id=b'\x00\x00\x00', crl_series=0, validity_period=_dummy_vp)
+    aa_cert = _Cert(version=2, cert_type=_CT.EXPLICIT, issuer=_II(_IC.SELF), tbs=_dummy_tbs)
     aa_cert.encoded = aa_cert_bytes
+
     aa_priv_key = deserialize_private_key(aa_priv_pem)
     psids = [PsidSsp(psid=int(p)) for p in args.psid.split(',')] if args.psid else None
 
@@ -300,6 +401,7 @@ def cmd_butterfly_at(args):
         app_psids=psids,
         sign_algorithm=algo,
         validity_hours=args.validity,
+        version=ver,
     )
 
     # ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
@@ -384,8 +486,7 @@ def cmd_verify_sig(args):
     Either check alone is informative; both together constitute full
     end-to-end verification as required by ETSI TS 103 097 V2.2.1.
     """
-    from src.encoding import decode_certificate
-    from src.types import PublicKeyAlgorithm, ItsAid
+    from src.types import PublicKeyAlgorithm, ItsAid, EtsiVersion
     from src.crypto import load_public_key_from_compressed
     from src.signing import verify_signed_data
     from src.verification import (
@@ -394,10 +495,25 @@ def cmd_verify_sig(args):
     )
     import datetime
 
+    # ── Detect certificate encoding version ───────────────────────────────────
+    at_cert_path = Path(args.at_cert)
+    ver_str = _detect_version_from_cert_path(at_cert_path, args.etsi_version)
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+
+    def _load_cert(path: Path):
+        """Load and decode a certificate using the detected version."""
+        cert_bytes = path.read_bytes()
+        if ver == EtsiVersion.V1_2_1:
+            from src.v1_encoding import decode_certificate_v1
+            cert, _ = decode_certificate_v1(cert_bytes)
+        else:
+            from src.encoding import decode_certificate
+            cert, _ = decode_certificate(cert_bytes)
+        cert.encoded = cert_bytes
+        return cert
+
     # ── Load AT certificate ───────────────────────────────────────────────────
-    at_cert_bytes = Path(args.at_cert).read_bytes()
-    at_cert, _ = decode_certificate(at_cert_bytes)
-    at_cert.encoded = at_cert_bytes
+    at_cert = _load_cert(at_cert_path)
 
     # ── Extract AT public key ─────────────────────────────────────────────────
     vk = at_cert.tbs.verify_key_indicator
@@ -419,7 +535,7 @@ def cmd_verify_sig(args):
 
     print(f"\n[Signed CAM]")
     print(f"  File         : {args.signed} ({len(signed_bytes)} bytes)")
-    print(f"  AT cert      : {args.at_cert}")
+    print(f"  AT cert      : {args.at_cert} ({ver_str.upper()})")
 
     result = verify_signed_data(
         signed_data_bytes=signed_bytes,
@@ -474,15 +590,11 @@ def cmd_verify_sig(args):
     if args.root:
         print(f"\n[Certificate Chain]")
 
-        root_bytes = Path(args.root).read_bytes()
-        root_cert, _ = decode_certificate(root_bytes)
-        root_cert.encoded = root_bytes
+        root_cert = _load_cert(Path(args.root))
 
         intermediates = []
         if args.aa:
-            aa_bytes = Path(args.aa).read_bytes()
-            aa_cert, _ = decode_certificate(aa_bytes)
-            aa_cert.encoded = aa_bytes
+            aa_cert = _load_cert(Path(args.aa))
             intermediates = [aa_cert]
             print(f"  AA cert      : {args.aa}")
         print(f"  Root CA cert : {args.root}")
@@ -549,13 +661,21 @@ def cmd_verify_sig(args):
 
 def cmd_encrypt(args):
     """Encrypt a payload for a recipient."""
-    from src.types import PublicKeyAlgorithm
+    from src.types import PublicKeyAlgorithm, EtsiVersion
     from src.crypto import deserialize_private_key
     from src.encryption import encrypt_data
-    from src.encoding import decode_certificate
 
-    enc_cert_bytes = Path(args.enc_cert).read_bytes()
-    enc_cert, _ = decode_certificate(enc_cert_bytes)
+    enc_cert_path = Path(args.enc_cert)
+    ver_str = _detect_version_from_cert_path(enc_cert_path, args.etsi_version)
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+
+    enc_cert_bytes = enc_cert_path.read_bytes()
+    if ver == EtsiVersion.V1_2_1:
+        from src.v1_encoding import decode_certificate_v1
+        enc_cert, _ = decode_certificate_v1(enc_cert_bytes)
+    else:
+        from src.encoding import decode_certificate
+        enc_cert, _ = decode_certificate(enc_cert_bytes)
     enc_cert.encoded = enc_cert_bytes
 
     enc_pub_key = None
@@ -604,32 +724,55 @@ def cmd_decrypt(args):
 
 def cmd_verify_cert(args):
     """Verify a certificate's signature and profile constraints."""
-    from src.encoding import decode_certificate
-    from src.types import PublicKeyAlgorithm, CertIdChoice
+    from src.types import PublicKeyAlgorithm, CertIdChoice, EtsiVersion
+
+    cert_path = Path(args.cert)
+    ver_str = _detect_version_from_cert_path(cert_path, args.etsi_version)
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+
+    cert_bytes = cert_path.read_bytes()
+
+    if ver == EtsiVersion.V1_2_1:
+        from src.v1_encoding import decode_certificate_v1
+        cert, _ = decode_certificate_v1(cert_bytes)
+        cert.encoded = cert_bytes
+        issuer_cert = None
+        if args.issuer:
+            issuer_bytes = Path(args.issuer).read_bytes()
+            issuer_cert, _ = decode_certificate_v1(issuer_bytes)
+            issuer_cert.encoded = issuer_bytes
+    else:
+        from src.encoding import decode_certificate
+        cert, _ = decode_certificate(cert_bytes, version=ver)
+        cert.encoded = cert_bytes
+        issuer_cert = None
+        if args.issuer:
+            issuer_bytes = Path(args.issuer).read_bytes()
+            issuer_cert, _ = decode_certificate(issuer_bytes, version=ver)
+            issuer_cert.encoded = issuer_bytes
+
     from src.verification import (
         verify_certificate_signature, verify_certificate_validity_period,
         verify_craca_and_crl_series, verify_permissions_constraints,
         verify_region_constraint, verify_at_profile
     )
 
-    cert_bytes = Path(args.cert).read_bytes()
-    cert, _ = decode_certificate(cert_bytes)
-    cert.encoded = cert_bytes
-
-    issuer_cert = None
-    if args.issuer:
-        issuer_bytes = Path(args.issuer).read_bytes()
-        issuer_cert, _ = decode_certificate(issuer_bytes)
-        issuer_cert.encoded = issuer_bytes
-
+    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V2.2.1'
     print(f"\n[Certificate Info]")
-    print(f"  Version      : {cert.version}")
-    print(f"  Type         : {cert.cert_type.name}")
+    if ver == EtsiVersion.V1_2_1:
+        print(f"  Format       : ETSI TS 103 097 {ver_label} (vanetza binary)")
+        print(f"  Cert version : {cert.version}  (vanetza format)")
+    else:
+        bitmap_note = '2-byte TBS bitmap'
+        print(f"  ETSI Standard: ETSI TS 103 097 {ver_label}  ({bitmap_note})")
+        print(f"  IEEE 1609.2 Cert Version : {cert.version}  (always 3)")
+        print(f"  Type         : {cert.cert_type.name}")
     print(f"  Id choice    : {cert.tbs.id.choice.name}")
     if cert.tbs.id.name:
         print(f"  Name         : {cert.tbs.id.name}")
-    print(f"  cracaId      : {cert.tbs.craca_id.hex()}")
-    print(f"  crlSeries    : {cert.tbs.crl_series}")
+    if ver == EtsiVersion.V2_2_1:
+        print(f"  cracaId      : {cert.tbs.craca_id.hex()}")
+        print(f"  crlSeries    : {cert.tbs.crl_series}")
 
     results = []
 
@@ -666,31 +809,66 @@ def cmd_verify_cert(args):
 
 def cmd_info(args):
     """Display information about a certificate."""
-    from src.encoding import decode_certificate
-    from src.types import ItsAid, its_time32_to_unix
+    from src.types import ItsAid, its_time32_to_unix, EtsiVersion
     import datetime
 
-    cert_bytes = Path(args.cert).read_bytes()
-    cert, _ = decode_certificate(cert_bytes)
-    cert.encoded = cert_bytes
+    cert_path = Path(args.cert)
+    ver_str = _detect_version_from_cert_path(cert_path, args.etsi_version)
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+
+    cert_bytes = cert_path.read_bytes()
+
+    if ver == EtsiVersion.V1_2_1:
+        from src.v1_encoding import decode_certificate_v1, V1SubjectType, hash_certificate_v1
+        cert, _ = decode_certificate_v1(cert_bytes)
+        cert.encoded = cert_bytes
+    else:
+        from src.encoding import decode_certificate
+        cert, _ = decode_certificate(cert_bytes, version=ver)
+        cert.encoded = cert_bytes
 
     start_unix = its_time32_to_unix(cert.tbs.validity_period.start)
     start_dt = datetime.datetime.utcfromtimestamp(start_unix).isoformat()
 
+    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V2.2.1'
+
     print(f"\n{'='*60}")
     print(f"EtsiTs103097Certificate")
     print(f"{'='*60}")
-    print(f"  Version         : {cert.version}")
-    print(f"  Type            : {cert.cert_type.name}")
+
+    if ver == EtsiVersion.V1_2_1:
+        # Vanetza format
+        subject_type_names = {
+            0: 'Enrollment_Credential',
+            1: 'Authorization_Ticket',
+            2: 'Authorization_Authority',
+            3: 'Enrollment_Authority',
+            4: 'Root_CA',
+            5: 'CRL_Signer',
+        }
+        st = getattr(cert, 'subject_type', None)
+        st_name = subject_type_names.get(st, str(st)) if st is not None else 'unknown'
+        print(f"  Format          : ETSI TS 103 097 {ver_label} (vanetza binary)")
+        print(f"  Cert version    : {cert.version}  (vanetza v2 format)")
+        print(f"  Subject type    : {st_name} ({st})")
+    else:
+        bitmap_note = '2-byte (IEEE 1609.2-2022/2025)'
+        print(f"  IEEE 1609.2 Cert Version : {cert.version}  (always 3 per IEEE 1609.2)")
+        print(f"  ETSI Standard   : ETSI TS 103 097 {ver_label}  (TBS bitmap: {bitmap_note})")
+        print(f"  Type            : {cert.cert_type.name}")
+
     print(f"  Issuer choice   : {cert.issuer.choice.name}")
     if cert.issuer.digest:
         print(f"  Issuer digest   : {cert.issuer.digest.hex()}")
     print(f"  Id choice       : {cert.tbs.id.choice.name}")
     if cert.tbs.id.name:
         print(f"  Name            : {cert.tbs.id.name}")
-    print(f"  cracaId         : {cert.tbs.craca_id.hex()} (expected: 000000)")
-    print(f"  crlSeries       : {cert.tbs.crl_series} (expected: 0)")
-    print(f"  ValidityPeriod  : start={start_dt}Z, duration={cert.tbs.validity_period.duration.value} {cert.tbs.validity_period.duration.choice.name}")
+
+    if ver == EtsiVersion.V2_2_1:
+        print(f"  cracaId         : {cert.tbs.craca_id.hex()} (expected: 000000)")
+        print(f"  crlSeries       : {cert.tbs.crl_series} (expected: 0)")
+
+    print(f"  ValidityPeriod  : start={start_dt}Z  duration={cert.tbs.validity_period.duration.value} {cert.tbs.validity_period.duration.choice.name}")
     if cert.tbs.region:
         print(f"  Region IDs      : {cert.tbs.region.ids}")
     if cert.tbs.app_permissions:
@@ -702,10 +880,11 @@ def cmd_info(args):
             except ValueError:
                 names.append(str(p))
         print(f"  appPermissions  : {names} (PSIDs: {psids})")
-    if cert.tbs.cert_issue_permissions:
-        print(f"  certIssuePerms  : present ({len(cert.tbs.cert_issue_permissions)} entries)")
-    else:
-        print(f"  certIssuePerms  : absent")
+    if ver == EtsiVersion.V2_2_1:
+        if cert.tbs.cert_issue_permissions:
+            print(f"  certIssuePerms  : present ({len(cert.tbs.cert_issue_permissions)} entries)")
+        else:
+            print(f"  certIssuePerms  : absent")
     if cert.tbs.encryption_key:
         print(f"  encryptionKey   : present ({cert.tbs.encryption_key.algorithm.name})")
     else:
@@ -716,11 +895,15 @@ def cmd_info(args):
         print(f"  verifyKey       : {alg} {pt[:16]}...")
     if cert.signature:
         print(f"  Signature alg   : {cert.signature.algorithm.name}")
-    print(f"  COER size       : {len(cert_bytes)} bytes")
+    print(f"  Encoded size    : {len(cert_bytes)} bytes")
     print(f"  HashedId8       : ", end="")
-    from src.crypto import hash_certificate
-    from src.types import PublicKeyAlgorithm
-    h8 = hash_certificate(cert_bytes, PublicKeyAlgorithm.ECDSA_NIST_P256)
+    if ver == EtsiVersion.V1_2_1:
+        from src.v1_encoding import hash_certificate_v1
+        h8 = hash_certificate_v1(cert_bytes)
+    else:
+        from src.crypto import hash_certificate
+        from src.types import PublicKeyAlgorithm
+        h8 = hash_certificate(cert_bytes, PublicKeyAlgorithm.ECDSA_NIST_P256)
     print(h8.hex())
     print()
 
