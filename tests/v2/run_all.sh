@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# run_all.sh — C-ITS PKI Test Suite Runner
+# run_all.sh — C-ITS PKI Test Suite Runner (ETSI TS 103 097 V2.2.1)
 # Runs all test scripts and reports overall pass/fail.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PKI_ROOT="$(dirname "$SCRIPT_DIR")"
+PKI_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 
-# Install dependencies in venvj
-uv sync
+# Install dependencies in venv
+(cd "$SCRIPT_DIR" && uv sync)
 
 # Always run python in uv managed venv
 export PYTHON="uv run python"

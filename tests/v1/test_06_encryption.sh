@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 06 — Message Encryption (ECIES + AES-128-CCM)
+# Test 06 — Message Encryption (ECIES + AES-128-CCM — ETSI TS 103 097 V1.2.1)
 # Covers: FR-EN-01 through FR-EN-06, AC-08, NFR-SEC-04
 
 source "$(dirname "$0")/helpers.sh"
@@ -12,14 +12,14 @@ section "FR-EN-01/02: ECIES + AES-128-CCM encrypt/decrypt"
 
 assert_python_ok "AC-08: AES-CCM encrypted message decrypts correctly with ECIES" "
 from src.crypto import generate_keypair
-from src.types import PublicKeyAlgorithm
+from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_ea_certificate
 from src.encryption import encrypt_data, decrypt_data
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 ea_s_priv, ea_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 ea_e_priv, ea_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv)
+ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 plaintext = b'Confidential ITS message: test payload 12345'
 encrypted = encrypt_data(plaintext, ea.encoded, ea_e_pub)
 assert encrypted is not None and len(encrypted) > len(plaintext)
@@ -106,43 +106,42 @@ section "NFR-SEC-04: AES-CCM nonce uniqueness"
 
 assert_python_ok "Different encryptions produce different nonces" "
 from src.crypto import generate_keypair
-from src.types import PublicKeyAlgorithm
+from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_ea_certificate
 from src.encryption import encrypt_data
 # Extract nonces from two encrypted messages and verify they differ
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 ea_s_priv, ea_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 ea_e_priv, ea_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv)
+ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 e1 = encrypt_data(b'msg1', ea.encoded, ea_e_pub)
 e2 = encrypt_data(b'msg2', ea.encoded, ea_e_pub)
 assert e1 != e2, 'Encrypted messages should differ due to fresh nonce'
 print('Nonce uniqueness OK')
 "
 
-section "FR-EN: Signed-and-encrypted (profile 10.5)"
+section "FR-EN: Signed-and-encrypted (profile 8.5)"
 
 assert_python_ok "SignedAndEncrypted roundtrip" "
 from src.crypto import generate_keypair, load_public_key_from_compressed
-from src.types import PublicKeyAlgorithm, ItsAid
+from src.types import PublicKeyAlgorithm, ItsAid, EtsiVersion
 from src.certificates import (issue_root_ca_certificate, issue_aa_certificate,
                                issue_authorization_ticket, issue_ea_certificate)
 from src.encryption import sign_and_encrypt, decrypt_and_verify
 
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 ea_s_priv, ea_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 ea_e_priv, ea_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv)
+ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 aa_s_priv, aa_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 aa_e_priv, aa_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv) if True else None
 
 from src.certificates import issue_aa_certificate
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv)
+aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv)
+at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 
 payload = b'Signed-and-encrypted test payload'
 se = sign_and_encrypt(payload, int(ItsAid.CAM), at_priv, at.encoded, ea.encoded, ea_e_pub)

@@ -8,33 +8,57 @@ PKI_ROOT="$(pwd)"
 PKI_CMD="$PYTHON $PKI_ROOT/cli.py"
 PKI_PY="$PYTHON -c"
 
-
 main() {
-#  for ETSI_VERSION in "${ETSI_VERSIONS[@]}"; do
-    ETSI_VERSION="v1"
-    init_pki
-    enroll_its_station
-    issue_auth_ticket
-    issue_bke_tickets
-    sign_and_verify_a_cam
-    sign_and_verify_a_denm
-    encrypt_a_message
-    decrypt_and_verify_a_message
-#  done
+  case $# in
+    0)
+      for ETSI_VERSION in "${ETSI_VERSIONS[@]}"; do
+        gen_verify
+      done
+      ;;
+    1)
+      if [[ ! "${ETSI_VERSIONS[*]}" =~ "$1" ]]; then
+        echo "Usage: $0 [ v1 | v2 ]"; exit -1
+      else
+        ETSI_VERSION=$1
+      fi
+      gen_verify
+      ;;
+    *)
+      echo "Usage: $0 [ v1 | v2 ]"; exit -1
+      ;;
+  esac
+}
+
+gen_verify() {
+  rm -rf cam* denm* pki-output
+  echo; echo; echo "Validating ETSI $ETSI_VERSION credential workflows..."; echo
+  init_pki
+  enroll_its_station
+  issue_auth_ticket
+  issue_bke_tickets
+  sign_and_verify_a_cam
+  sign_and_verify_a_denm
+  encrypt_a_message
+  decrypt_and_verify_a_message
 }
 
 #===================================
 init_pki() {
   uv sync
-  $PKI_CMD init --output pki-output --algo p256 --region 65535 --etsi-version $ETSI_VERSION
+  $PKI_CMD init --output pki-output \
+                --algo p256 \
+                --region 65535 \
+                --etsi-version $ETSI_VERSION
   echo; echo; echo "######################"
   echo "Root cert:"
   echo "######################"
-  $PKI_CMD info --cert pki-output/root_ca.cert --etsi-version $ETSI_VERSION
+  $PKI_CMD info --cert pki-output/root_ca.cert \
+                --etsi-version $ETSI_VERSION
   echo; echo; echo "######################"
   echo "Enrollment Authority cert:"
   echo "######################"
-  $PKI_CMD info --cert pki-output/ea.cert --etsi-version $ETSI_VERSION
+  $PKI_CMD info --cert pki-output/ea.cert \
+                --etsi-version $ETSI_VERSION
   echo "Verifying signed by root cert..."
   $PKI_CMD verify-cert --cert pki-output/ea.cert \
 			                 --issuer pki-output/root_ca.cert \
@@ -42,11 +66,12 @@ init_pki() {
   echo; echo; echo "######################"
   echo "Authorization Authority:"
   echo "######################"
-  $PKI_CMD info --cert pki-output/aa.cert --etsi-version $ETSI_VERSION
+  $PKI_CMD info --cert pki-output/aa.cert \
+                --etsi-version $ETSI_VERSION
   echo "Verifying signed by root cert..."
   $PKI_CMD verify-cert --cert pki-output/aa.cert \
 			                 --issuer pki-output/root_ca.cert \
-                      --etsi-version $ETSI_VERSION
+                       --etsi-version $ETSI_VERSION
 }
 
 #===================================
@@ -54,8 +79,10 @@ enroll_its_station() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Enroll an ITS-Station"
-  $PKI_CMD enrol --output pki-output --name "ITS-Station-001"
-  $PKI_CMD info --cert pki-output/its-stations/ITS-Station-001/ec.cert  --etsi-version $ETSI_VERSION
+  $PKI_CMD enrol --output pki-output \
+                 --name "ITS-Station-001"
+  $PKI_CMD info --cert pki-output/its-stations/ITS-Station-001/ec.cert  \
+                --etsi-version $ETSI_VERSION
   $PKI_CMD verify-cert --cert pki-output/its-stations/ITS-Station-001/ec.cert \
 			                 --issuer pki-output/ea.cert \
                        --etsi-version $ETSI_VERSION
@@ -67,12 +94,17 @@ issue_auth_ticket() {
   echo "######################"
   echo "Issue an Authorization Ticket"
   rm -rf pki-output/tickets
-  $PKI_CMD issue-at --output pki-output --psid 36,37 --validity 168
+  $PKI_CMD issue-at --output pki-output \
+                    --psid 36,37 \
+                    --validity 168
   AUTH_TICKET=$(ls ./pki-output/tickets/at_*.cert)
-  $PKI_CMD info --cert $AUTH_TICKET  --etsi-version $ETSI_VERSION
+  $PKI_CMD info --cert $AUTH_TICKET  \
+                --etsi-version $ETSI_VERSION
   echo "Verifying signed by AA cert..."
   SIGN_KEY=$(ls ./pki-output/aa.cert)
-  $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-cert --cert $AUTH_TICKET \
+                       --issuer $SIGN_KEY  \
+                       --etsi-version $ETSI_VERSION
 }
 
 #===================================
@@ -81,12 +113,18 @@ issue_bke_tickets() {
   echo "######################"
   echo "Issue BKE Authorization Tickets"
   rm -rf pki-output/bke-tickets
-  $PKI_CMD butterfly-at --output pki-output --count 8 --psid 36,37 --validity 168
+  $PKI_CMD butterfly-at --output pki-output \
+                        --count 8 \
+                        --psid 36,37 \
+                        --validity 168
   AUTH_TICKET=$(ls ./pki-output/bke-tickets/bke_at_0.cert)
-  $PKI_CMD info --cert $AUTH_TICKET  --etsi-version $ETSI_VERSION
+  $PKI_CMD info --cert $AUTH_TICKET  \
+                --etsi-version $ETSI_VERSION
   echo "Verifying butterfly AT cert was signed by AA cert..."
   SIGN_KEY=$(ls ./pki-output/aa.cert)
-  $PKI_CMD verify-cert --cert $AUTH_TICKET --issuer $SIGN_KEY  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-cert --cert $AUTH_TICKET \
+                       --issuer $SIGN_KEY  \
+                       --etsi-version $ETSI_VERSION
 }
 
 
@@ -98,25 +136,22 @@ sign_and_verify_a_cam() {
   echo -n "CAM_PAYLOAD" > cam.bin
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
   SIGN_KEY=$(ls ./pki-output/tickets/*.key)
-  $PKI_CMD sign-cam \
-    --at-key $SIGN_KEY \
-    --at-cert $AUTH_TICKET \
-    --payload cam.bin \
-    --output cam.signed
+  $PKI_CMD sign-cam --at-key $SIGN_KEY \
+                    --at-cert $AUTH_TICKET \
+                    --payload cam.bin \
+                    --output cam.signed
   echo; echo "-------------------------------"
   echo "Verify CAM signature (fast):"
-  $PKI_CMD verify-sig \
-  --signed  cam.signed \
-  --at-cert $AUTH_TICKET \
-  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-sig --signed  cam.signed \
+                      --at-cert $AUTH_TICKET \
+                      --etsi-version $ETSI_VERSION
   echo; echo "-------------------------------"
   echo "Verify CAM signature (full chain):"
-  $PKI_CMD verify-sig \
-  --signed  cam.signed \
-  --at-cert $AUTH_TICKET \
-  --aa      pki-output/aa.cert \
-  --root    pki-output/root_ca.cert \
-  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-sig --signed  cam.signed \
+                      --at-cert $AUTH_TICKET \
+                      --aa      pki-output/aa.cert \
+                      --root    pki-output/root_ca.cert \
+                      --etsi-version $ETSI_VERSION
 }
 
 #===================================
@@ -127,26 +162,23 @@ sign_and_verify_a_denm() {
   echo -n "DENM_PAYLOAD" > denm.bin
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
   SIGN_KEY=$(ls ./pki-output/tickets/*.key)
-  $PKI_CMD sign-denm \
-    --at-key $SIGN_KEY \
-    --at-cert $AUTH_TICKET \
-    --payload denm.bin \
-    --lat 52.5200 --lon 13.4050 \
-    --output denm.signed
+  $PKI_CMD sign-denm --at-key $SIGN_KEY \
+                     --at-cert $AUTH_TICKET \
+                     --payload denm.bin \
+                     --lat 52.5200 --lon 13.4050 \
+                     --output denm.signed
   echo; echo "-------------------------------"
   echo "Verify DENM signature (fast):"
-  $PKI_CMD verify-sig \
-  --signed  denm.signed \
-  --at-cert $AUTH_TICKET \
-  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-sig --signed  denm.signed \
+                      --at-cert $AUTH_TICKET \
+                      --etsi-version $ETSI_VERSION
   echo; echo "-------------------------------"
   echo "Verify DENM signature (full chain):"
-  $PKI_CMD verify-sig \
-  --signed  denm.signed \
-  --at-cert $AUTH_TICKET \
-  --aa      pki-output/aa.cert \
-  --root    pki-output/root_ca.cert \
-  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-sig --signed  denm.signed \
+                      --at-cert $AUTH_TICKET \
+                      --aa      pki-output/aa.cert \
+                      --root    pki-output/root_ca.cert \
+                      --etsi-version $ETSI_VERSION
 }
 
 #===================================
@@ -154,12 +186,11 @@ encrypt_a_message() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Encrypt a message (for the EA)"
-  $PKI_CMD encrypt \
-    --enc-cert pki-output/ea.cert \
-    --enc-key pki-output/ea_enc.key \
-    --payload cam.signed \
-    --output cam.enc \
-    --etsi-version $ETSI_VERSION
+  $PKI_CMD encrypt --enc-cert pki-output/ea.cert \
+                   --enc-key pki-output/ea_enc.key \
+                   --payload cam.signed \
+                   --output cam.enc \
+                   --etsi-version $ETSI_VERSION
 }
 
 #===================================
@@ -167,18 +198,16 @@ decrypt_and_verify_a_message() {
   echo; echo; echo; echo; 
   echo "######################"
   echo "Decrypt & verify a message"
-  $PKI_CMD decrypt \
-    --enc-cert pki-output/ea.cert \
-    --enc-key pki-output/ea_enc.key \
-    --input cam.enc \
-    --output cam.decrypted
+  $PKI_CMD decrypt --enc-cert pki-output/ea.cert \
+                   --enc-key pki-output/ea_enc.key \
+                   --input cam.enc \
+                   --output cam.decrypted
   echo; echo "-------------------------------"
   echo "Verify decrypted CAM signature (fast):"
   AUTH_TICKET=$(ls ./pki-output/tickets/*.cert)
-  $PKI_CMD verify-sig \
-  --signed  cam.decrypted \
-  --at-cert $AUTH_TICKET \
-  --etsi-version $ETSI_VERSION
+  $PKI_CMD verify-sig --signed  cam.decrypted \
+                      --at-cert $AUTH_TICKET \
+                      --etsi-version $ETSI_VERSION
 }
 
 main "$@"

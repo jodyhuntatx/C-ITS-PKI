@@ -321,15 +321,45 @@ def encode_subject_attributes_v1(vk: PublicVerificationKey,
 
 # ── Validity restriction encoding ─────────────────────────────────────────────
 
-def _encode_time_start_and_duration(start: int, duration: Duration) -> bytes:
+# Vanetza Duration.to_seconds() multipliers (validity_restriction.cpp)
+_VANETZA_TO_SECONDS = {
+    DurationChoice.SECONDS:     1,
+    DurationChoice.MINUTES:     60,
+    DurationChoice.HOURS:       3600,
+    DurationChoice.SIXTY_HOURS: 216000,
+    DurationChoice.YEARS:       31556925,
+}
+
+
+def _duration_to_its_seconds(duration: Duration) -> int:
     """
-    Time_Start_And_Duration validity restriction (type 0x02):
-      [0x02][start: 4 bytes BE][duration: 2 bytes]
-    Total: 7 bytes.
+    Convert a Duration to seconds using Vanetza's exact multipliers.
+    Matches Duration::to_seconds() in vanetza/security/v2/validity_restriction.cpp.
     """
-    return (bytes([V1ValidityRestrictionType.TIME_START_AND_DURATION]) +
+    multiplier = _VANETZA_TO_SECONDS.get(duration.choice)
+    if multiplier is None:
+        raise ValueError(f"Unsupported duration choice for v1 encoding: {duration.choice!r}")
+    return duration.value * multiplier
+
+
+def _encode_time_start_and_end(start: int, duration: Duration) -> bytes:
+    """
+    Time_Start_And_End validity restriction (type 0x01):
+      [0x01][start: 4 bytes BE][end: 4 bytes BE]
+    Total: 9 bytes.
+
+    The end ITS timestamp is computed as start + duration_in_seconds using the
+    same multipliers as Vanetza's Duration::to_seconds() so that the unmodified
+    vanetza certify show-certificate tool displays correct validity dates.
+
+    Note: Time_Start_And_Duration (type 2) is NOT used because the certify tool's
+    show-certificate.cpp line 208 computes ``time_end = epoch + duration.to_seconds()``
+    rather than ``epoch + start + duration.to_seconds()``, producing wrong dates.
+    """
+    end = start + _duration_to_its_seconds(duration)
+    return (bytes([V1ValidityRestrictionType.TIME_START_AND_END]) +
             start.to_bytes(4, 'big') +
-            encode_duration_v1(duration))
+            end.to_bytes(4, 'big'))
 
 
 def _encode_region_vr(region: GeographicRegion) -> bytes:
@@ -379,12 +409,12 @@ def encode_validity_restrictions_v1(validity_period: ValidityPeriod,
     The caller wraps this with encode_length(len(result)).
 
     Always produces:
-      Time_Start_And_Duration (type 2): 7 bytes
+      Time_Start_And_End (type 1): 9 bytes
 
     Optionally appends:
       Region (type 3): 7 bytes for one IdentifiedRegion
     """
-    vr = _encode_time_start_and_duration(
+    vr = _encode_time_start_and_end(
         validity_period.start, validity_period.duration
     )
     if region is not None:

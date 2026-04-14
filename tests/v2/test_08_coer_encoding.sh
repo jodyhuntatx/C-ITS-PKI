@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 08 — COER Encoding Correctness (NFR-INT-01, AC-12)
+# Test 08 — COER Encoding Correctness (NFR-INT-01, AC-12 — ETSI TS 103 097 V2.2.1)
 # Covers: NFR-INT-01, NFR-INT-04, AC-11, AC-12
 
 source "$(dirname "$0")/helpers.sh"
@@ -73,11 +73,11 @@ section "Certificate structure encoding roundtrip (AC-12)"
 
 assert_python_ok "AC-12: Full certificate COER encode/decode roundtrip" "
 from src.crypto import generate_keypair
-from src.types import PublicKeyAlgorithm
+from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate
 from src.encoding import encode_certificate, decode_certificate
 priv, pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-cert = issue_root_ca_certificate('RoundtripCA', priv, pub)
+cert = issue_root_ca_certificate('RoundtripCA', priv, pub, version=EtsiVersion.V2_2_1)
 # Re-decode from COER bytes
 decoded, consumed = decode_certificate(cert.encoded)
 assert consumed == len(cert.encoded), f'Not all bytes consumed: {consumed} vs {len(cert.encoded)}'
@@ -92,14 +92,14 @@ print('AC-12 PASSED: Certificate COER roundtrip OK')
 
 assert_python_ok "Certificate with encryptionKey roundtrip" "
 from src.crypto import generate_keypair
-from src.types import PublicKeyAlgorithm
+from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_ea_certificate
 from src.encoding import decode_certificate
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRCA', rca_priv, rca_pub)
+rca = issue_root_ca_certificate('TestRCA', rca_priv, rca_pub, version=EtsiVersion.V2_2_1)
 ea_s_priv, ea_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 ea_e_priv, ea_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv)
+ea = issue_ea_certificate('TestEA', ea_s_priv, ea_s_pub, ea_e_pub, rca, rca_priv, version=EtsiVersion.V2_2_1)
 decoded, _ = decode_certificate(ea.encoded)
 decoded.encoded = ea.encoded
 assert decoded.tbs.encryption_key is not None
@@ -135,10 +135,10 @@ section "NFR-INT-01: All structures use COER"
 
 assert_python_ok "Certificate bytes are pure binary (COER, not PEM/DER)" "
 from src.crypto import generate_keypair
-from src.types import PublicKeyAlgorithm
+from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate
 priv, pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-cert = issue_root_ca_certificate('TestCA', priv, pub)
+cert = issue_root_ca_certificate('TestCA', priv, pub, version=EtsiVersion.V2_2_1)
 # Version byte must be 3
 assert cert.encoded[0] == 3, f'First byte must be version 3, got {cert.encoded[0]}'
 # Not PEM (no '-----BEGIN')

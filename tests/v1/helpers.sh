@@ -17,7 +17,7 @@ TEST_NAME=""
 
 # ── PKI project root ──────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKI_ROOT="$(dirname "$SCRIPT_DIR")"
+PKI_ROOT="$(dirname "$(dirname "$SCRIPT_DIR")")"
 PKI_CMD="$PYTHON $PKI_ROOT/cli.py"
 PKI_PY="$PYTHON -c"
 
