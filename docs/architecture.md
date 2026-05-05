@@ -282,7 +282,7 @@ Certificate chain and profile validation per IEEE 1609.2 clause 5.1:
 | `verify-cert` | `--cert`, `--issuer`, `--etsi-version` | Verify a certificate |
 | `info` | `--cert`, `--etsi-version` | Display certificate details |
 
-For `info` and `verify-cert`, `--etsi-version` is optional. The format is auto-detected by searching the certificate's directory tree for `pki_meta.json`; if not found, `v1` (vanetza) is assumed.
+For `info` and `verify-cert`, `--etsi-version` is optional. The format is auto-detected by searching the certificate's directory tree for `pki_meta.json`; if not found, `v2` (vanetza) is assumed.
 
 ---
 

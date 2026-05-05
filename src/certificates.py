@@ -12,15 +12,13 @@ from .types import (
     PsidSsp, PsidGroupPermissions, PublicVerificationKey, PublicEncryptionKey,
     EcdsaSignature, CertificateType, IssuerChoice, CertIdChoice,
     DurationChoice, RegionChoice, PublicKeyAlgorithm, HashAlgorithm, ItsAid,
-    EtsiVersion, unix_to_its_time32
+    EtsiVersion, unix_to_its_time32, V1SubjectType
 )
 from .encoding import encode_certificate, encode_tbs_certificate
 from .crypto import (
     generate_keypair, ecdsa_sign, hash_certificate, public_key_to_point
 )
-from .v1_encoding import (
-    build_and_sign_v1, hash_certificate_v1, V1SubjectType
-)
+from .v1_encoding import build_and_sign_v1, hash_certificate_v1
 
 
 # ── Constants (ETSI TS 103 097 V2.2.1 clause 8.1) ────────────────────────────

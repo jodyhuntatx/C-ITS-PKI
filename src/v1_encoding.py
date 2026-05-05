@@ -31,80 +31,11 @@ from .types import (
     ValidityPeriod, Duration, GeographicRegion,
     PsidSsp, PublicVerificationKey, PublicEncryptionKey, EcdsaSignature,
     CertificateType, IssuerChoice, CertIdChoice, DurationChoice, RegionChoice,
-    PublicKeyAlgorithm, EccPoint, EtsiVersion
+    PublicKeyAlgorithm, EccPoint, EtsiVersion,
+    # Vanetza v2 wire-format constants (defined in types.py alongside other enums)
+    V1SubjectType, V1SignerInfoType, V1EccPointType, V1PublicKeyAlgorithm,
+    V1SubjectAttributeType, V1ValidityRestrictionType, V1RegionType, V1RegionDictionary,
 )
-
-
-# ── Vanetza v2 SubjectType enum (subject_info.hpp) ────────────────────────────
-
-class V1SubjectType:
-    ENROLLMENT_CREDENTIAL   = 0
-    AUTHORIZATION_TICKET    = 1
-    AUTHORIZATION_AUTHORITY = 2
-    ENROLLMENT_AUTHORITY    = 3
-    ROOT_CA                 = 4
-    CRL_SIGNER              = 5
-
-
-# ── Vanetza v2 SignerInfoType enum (signer_info.hpp) ──────────────────────────
-
-class V1SignerInfoType:
-    SELF                           = 0
-    CERTIFICATE_DIGEST_WITH_SHA256 = 1
-    CERTIFICATE                    = 2
-    CERTIFICATE_CHAIN              = 3
-
-
-# ── Vanetza v2 EccPointType enum (ecc_point.hpp) ─────────────────────────────
-
-class V1EccPointType:
-    X_COORDINATE_ONLY  = 0
-    COMPRESSED_LSB_Y_0 = 2
-    COMPRESSED_LSB_Y_1 = 3
-    UNCOMPRESSED       = 4
-
-
-# ── Vanetza v2 PublicKeyAlgorithm enum (public_key.hpp) ───────────────────────
-
-class V1PublicKeyAlgorithm:
-    ECDSA_NISTP256_WITH_SHA256 = 0
-    ECIES_NISTP256             = 1
-
-
-# ── Vanetza v2 SubjectAttributeType enum (subject_attribute.hpp) ──────────────
-
-class V1SubjectAttributeType:
-    VERIFICATION_KEY = 0
-    ENCRYPTION_KEY   = 1
-    ASSURANCE_LEVEL  = 2
-    ITS_AID_LIST     = 32   # 0x20
-    ITS_AID_SSP_LIST = 33   # 0x21
-
-
-# ── Vanetza v2 ValidityRestrictionType enum (validity_restriction.hpp) ────────
-
-class V1ValidityRestrictionType:
-    TIME_END                = 0
-    TIME_START_AND_END      = 1
-    TIME_START_AND_DURATION = 2
-    REGION                  = 3
-
-
-# ── Vanetza v2 RegionType enum (region.hpp) ───────────────────────────────────
-
-class V1RegionType:
-    NONE      = 0
-    CIRCLE    = 1
-    RECTANGLE = 2
-    POLYGON   = 3
-    ID        = 4
-
-
-# ── Vanetza v2 RegionDictionary enum (region.hpp) ─────────────────────────────
-
-class V1RegionDictionary:
-    ISO_3166_1 = 0
-    UN_STATS   = 1
 
 
 # ── Vanetza duration unit mapping ─────────────────────────────────────────────

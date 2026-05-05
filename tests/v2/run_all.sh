@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_all.sh — C-ITS PKI Test Suite Runner (ETSI TS 103 097 V2.2.1)
+# run_all.sh — C-ITS PKI Test Suite Runner (ETSI TS 103 097 V1.2.1)
 # Runs all test scripts and reports overall pass/fail.
 
 set -uo pipefail
@@ -22,7 +22,7 @@ NC='\033[0m'
 
 echo ""
 echo -e "${BOLD}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}║     C-ITS PKI Test Suite — ETSI TS 103 097 V2.2.1       ║${NC}"
+echo -e "${BOLD}║     C-ITS PKI Test Suite — ETSI TS 103 097 V1.2.1       ║${NC}"
 echo -e "${BOLD}╚══════════════════════════════════════════════════════════╝${NC}"
 echo ""
 

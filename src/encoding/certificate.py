@@ -1,171 +1,39 @@
 """
-COER encoding and decoding for IEEE 1609.2 / ETSI TS 103 097 certificate structures.
+Certificate structure encoding/decoding.
 
-Implements the canonical encoding of all certificate-level data structures
-per ITU-T X.696 (COER) and IEEE Std 1609.2-2025 Annex B.
+Covers the COER representations of:
+  - Duration / ValidityPeriod              (IEEE 1609.2 clauses 6.3.24, 6.3.39)
+  - GeographicRegion                       (clause 6.3.4)
+  - IssuerIdentifier                       (clause 6.3.27)
+  - CertificateId                          (clause 6.4.3)
+  - VerifyKeyIndicator                     (clause 6.4.7)
+  - ToBeSignedCertificate                  (clause 6.4.6)
+  - Certificate / EtsiTs103097Certificate  (clause 6.4.2)
 """
-from .coer import (
+from ..coer import (
     encode_uint8, encode_uint16, encode_uint32,
-    encode_length, encode_octet_string, encode_utf8string,
-    encode_choice, encode_sequence, encode_enumerated, encode_bit_string,
+    encode_choice, encode_enumerated,
+    encode_octet_string, encode_utf8string,
     decode_uint8, decode_uint16, decode_uint32,
-    decode_length, decode_octet_string, decode_utf8string,
-    decode_choice_tag
+    decode_choice_tag, decode_octet_string, decode_utf8string,
 )
-from .types import (
+from ..types import (
     Certificate, ToBeSignedCertificate, IssuerIdentifier, CertificateId,
     ValidityPeriod, Duration, GeographicRegion, SubjectAssurance,
-    PsidSsp, PsidGroupPermissions, PublicVerificationKey, PublicEncryptionKey,
-    EccPoint, EcdsaSignature, CertificateType, IssuerChoice, CertIdChoice,
-    DurationChoice, RegionChoice, PublicKeyAlgorithm, EccP256CurvePointChoice,
-    HashAlgorithm, EtsiVersion
+    PsidSsp, PublicVerificationKey, EccPoint,
+    CertificateType, IssuerChoice, CertIdChoice, DurationChoice, RegionChoice,
+    PublicKeyAlgorithm, HashAlgorithm, EtsiVersion,
 )
-
-
-# ── ECC Point encoding ────────────────────────────────────────────────────────
-
-def encode_ecc_p256_point(point: EccPoint) -> bytes:
-    """
-    EccP256CurvePoint CHOICE (IEEE 1609.2 clause 6.3.19):
-      x-only        [0]: 32-byte x-coordinate only
-      compressed-y0 [2]: 32-byte x (y-parity = 0)
-      compressed-y1 [3]: 32-byte x (y-parity = 1)
-      uncompressed  [4]: 64 bytes (x || y)
-    We always encode in compressed form.
-    """
-    tag = EccP256CurvePointChoice.COMPRESSED_Y0 if point.y_parity == 0 \
-        else EccP256CurvePointChoice.COMPRESSED_Y1
-    x_only = point.compressed[1:]   # strip the 0x02/0x03 prefix → 32 bytes
-    return encode_choice(tag, x_only)
-
-
-def decode_ecc_p256_point(data: bytes, offset: int):
-    tag, offset = decode_choice_tag(data, offset)
-    if tag in (EccP256CurvePointChoice.COMPRESSED_Y0,
-               EccP256CurvePointChoice.COMPRESSED_Y1):
-        x = data[offset:offset + 32]; offset += 32
-        prefix = 0x02 if tag == EccP256CurvePointChoice.COMPRESSED_Y0 else 0x03
-        compressed = bytes([prefix]) + x
-        y_parity = tag - 2
-        return EccPoint(curve='P-256', compressed=compressed, y_parity=y_parity), offset
-    elif tag == EccP256CurvePointChoice.X_ONLY:
-        x = data[offset:offset + 32]; offset += 32
-        return EccPoint(curve='P-256', compressed=b'\x02' + x, y_parity=0), offset
-    else:
-        raise ValueError(f"Unsupported EccP256CurvePoint tag: {tag}")
-
-
-def encode_ecc_p384_point(point: EccPoint) -> bytes:
-    """EccP384CurvePoint (same structure, 48-byte coordinates)."""
-    tag = 2 if point.y_parity == 0 else 3
-    x_only = point.compressed[1:]   # 48 bytes
-    return encode_choice(tag, x_only)
-
-
-def decode_ecc_p384_point(data: bytes, offset: int):
-    tag, offset = decode_choice_tag(data, offset)
-    if tag in (2, 3):
-        x = data[offset:offset + 48]; offset += 48
-        prefix = 0x02 if tag == 2 else 0x03
-        compressed = bytes([prefix]) + x
-        y_parity = tag - 2
-        return EccPoint(curve='P-384', compressed=compressed, y_parity=y_parity), offset
-    elif tag == 0:
-        x = data[offset:offset + 48]; offset += 48
-        return EccPoint(curve='P-384', compressed=b'\x02' + x, y_parity=0), offset
-    else:
-        raise ValueError(f"Unsupported EccP384CurvePoint tag: {tag}")
-
-
-# ── Public key encoding ───────────────────────────────────────────────────────
-
-def encode_public_verification_key(vk: PublicVerificationKey) -> bytes:
-    """
-    PublicVerificationKey CHOICE (IEEE 1609.2 clause 6.3.32):
-      ecdsaNistP256 [0]
-      ecdsaNistP384 [1]
-    """
-    if vk.algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256:
-        return encode_choice(0, encode_ecc_p256_point(vk.point))
-    else:
-        return encode_choice(1, encode_ecc_p384_point(vk.point))
-
-
-def decode_public_verification_key(data: bytes, offset: int):
-    tag, offset = decode_choice_tag(data, offset)
-    if tag == 0:
-        point, offset = decode_ecc_p256_point(data, offset)
-        return PublicVerificationKey(PublicKeyAlgorithm.ECDSA_NIST_P256, point), offset
-    else:
-        point, offset = decode_ecc_p384_point(data, offset)
-        return PublicVerificationKey(PublicKeyAlgorithm.ECDSA_NIST_P384, point), offset
-
-
-def encode_public_encryption_key(ek: PublicEncryptionKey) -> bytes:
-    """
-    PublicEncryptionKey ::= SEQUENCE {
-      supportedSymmAlg SymmAlgorithm,   -- aes128Ccm = 0
-      publicKey        BasePublicEncryptionKey CHOICE {
-        eciesNistP256 [0]
-        eciesNistP384 [1]
-      }
-    }
-    """
-    sym_alg = encode_uint8(0)   # aes128Ccm
-    if ek.algorithm == PublicKeyAlgorithm.ECIES_NIST_P256:
-        key_enc = encode_choice(0, encode_ecc_p256_point(ek.point))
-    else:
-        key_enc = encode_choice(1, encode_ecc_p384_point(ek.point))
-    return sym_alg + key_enc
-
-
-def decode_public_encryption_key(data: bytes, offset: int):
-    _sym_alg, offset = decode_uint8(data, offset)   # should be 0
-    tag, offset = decode_choice_tag(data, offset)
-    if tag == 0:
-        point, offset = decode_ecc_p256_point(data, offset)
-        return PublicEncryptionKey(PublicKeyAlgorithm.ECIES_NIST_P256, point), offset
-    else:
-        point, offset = decode_ecc_p384_point(data, offset)
-        return PublicEncryptionKey(PublicKeyAlgorithm.ECIES_NIST_P384, point), offset
-
-
-# ── Signature encoding ────────────────────────────────────────────────────────
-
-def encode_signature(sig: EcdsaSignature) -> bytes:
-    """
-    Signature CHOICE (IEEE 1609.2 clause 6.3.37):
-      ecdsaNistP256Signature [0]: EcdsaP256Signature
-      ecdsaNistP384Signature [1]: EcdsaP384Signature
-
-    EcdsaP256Signature ::= SEQUENCE {
-      r EccP256CurvePoint,   -- x-only form
-      s OCTET STRING (SIZE(32))
-    }
-    r is stored as x-only (EccP256CurvePointChoice.X_ONLY = 0).
-    """
-    if sig.algorithm == PublicKeyAlgorithm.ECDSA_NIST_P256:
-        r_enc = encode_choice(EccP256CurvePointChoice.X_ONLY, sig.r)   # 32 bytes
-        sig_enc = r_enc + sig.s                                         # s is 32 bytes fixed
-        return encode_choice(0, sig_enc)
-    else:
-        r_enc = encode_choice(0, sig.r)   # x-only for P-384 (48 bytes)
-        sig_enc = r_enc + sig.s           # s is 48 bytes fixed
-        return encode_choice(1, sig_enc)
-
-
-def decode_signature(data: bytes, offset: int):
-    sig_choice, offset = decode_choice_tag(data, offset)
-    if sig_choice == 0:     # P-256
-        _r_tag, offset = decode_choice_tag(data, offset)
-        r = data[offset:offset + 32]; offset += 32
-        s = data[offset:offset + 32]; offset += 32
-        return EcdsaSignature(r=r, s=s, algorithm=PublicKeyAlgorithm.ECDSA_NIST_P256), offset
-    else:                   # P-384
-        _r_tag, offset = decode_choice_tag(data, offset)
-        r = data[offset:offset + 48]; offset += 48
-        s = data[offset:offset + 48]; offset += 48
-        return EcdsaSignature(r=r, s=s, algorithm=PublicKeyAlgorithm.ECDSA_NIST_P384), offset
+from .keys import (
+    encode_ecc_p256_point, decode_ecc_p256_point,
+    encode_public_verification_key, decode_public_verification_key,
+    encode_public_encryption_key, decode_public_encryption_key,
+    encode_signature, decode_signature,
+)
+from .permissions import (
+    encode_seq_of_psid_ssp, encode_seq_of_psid_group_permissions,
+    decode_psid,
+)
 
 
 # ── Duration encoding ─────────────────────────────────────────────────────────
@@ -228,96 +96,6 @@ def decode_geographic_region(data: bytes, offset: int):
                 ids.append(cid)
         return GeographicRegion(choice=RegionChoice.ID, ids=ids), offset
     raise ValueError(f"Unsupported GeographicRegion choice: {choice}")
-
-
-# ── PsidSsp (appPermissions) encoding ─────────────────────────────────────────
-
-def encode_psid(psid: int) -> bytes:
-    """PSID variable-length encoding per IEEE 1609.2 clause 6.3.23 (1–4 bytes)."""
-    if psid < 0x80:
-        return bytes([psid])
-    elif psid < 0x4000:
-        return bytes([0x80 | (psid >> 8), psid & 0xFF])
-    elif psid < 0x200000:
-        return bytes([0xC0 | (psid >> 16), (psid >> 8) & 0xFF, psid & 0xFF])
-    else:
-        return bytes([0xE0 | (psid >> 24), (psid >> 16) & 0xFF,
-                      (psid >> 8) & 0xFF, psid & 0xFF])
-
-
-def decode_psid(data: bytes, offset: int):
-    b0 = data[offset]
-    if b0 < 0x80:
-        return b0, offset + 1
-    elif b0 < 0xC0:
-        return ((b0 & 0x3F) << 8) | data[offset + 1], offset + 2
-    elif b0 < 0xE0:
-        return (((b0 & 0x1F) << 16) | (data[offset + 1] << 8) |
-                data[offset + 2]), offset + 3
-    else:
-        return (((b0 & 0x0F) << 24) | (data[offset + 1] << 16) |
-                (data[offset + 2] << 8) | data[offset + 3]), offset + 4
-
-
-def encode_psid_ssp(ps: PsidSsp) -> bytes:
-    """
-    PsidSsp ::= SEQUENCE {
-      psid Psid,
-      ssp  ServiceSpecificPermissions OPTIONAL
-    }
-    ServiceSpecificPermissions CHOICE: opaque [0] OCTET STRING.
-    """
-    psid_enc = encode_psid(ps.psid)
-    if ps.ssp is not None:
-        ssp_enc = encode_choice(0, encode_octet_string(ps.ssp))
-        has_ssp = True
-    else:
-        ssp_enc = b''
-        has_ssp = False
-
-    # 1-byte bitmap for the single optional field (ssp)
-    bitmap = bytes([0x80]) if has_ssp else bytes([0x00])
-    result = bitmap + psid_enc
-    if has_ssp:
-        result += ssp_enc
-    return result
-
-
-def encode_seq_of_psid_ssp(perms: list) -> bytes:
-    """SequenceOfPsidSsp: length-prefixed list."""
-    items = b''.join(encode_psid_ssp(p) for p in perms)
-    return encode_octet_string(items)
-
-
-def encode_psid_group_permissions(pgp: PsidGroupPermissions) -> bytes:
-    """
-    PsidGroupPermissions ::= SEQUENCE {
-      subjectPermissions SubjectPermissions,
-      minChainDepth      INTEGER DEFAULT 1,
-      chainDepthRange    INTEGER DEFAULT 0,
-      eeType             EndEntityType DEFAULT {app}
-    }
-    SubjectPermissions CHOICE:
-      all      [0]: NULL (grant all PSIDs)
-      explicit [1]: SequenceOfPsidSspRange
-    We use 'all' for this implementation.
-
-    EndEntityType ::= BIT STRING { app(0), enrol(1) } (SIZE(8))
-    COER fixed-size BIT STRING SIZE(8): encoded as 1 octet (no length or unused bits).
-    Default = {app} = bit 0 set = 0x80.
-    """
-    subject_perms = encode_choice(0, b'')          # all
-    chain_depth   = encode_uint8(pgp.min_chain_depth)
-    depth_range   = encode_uint8(pgp.chain_depth_range)
-    # EndEntityType: BIT STRING SIZE(8) → fixed 1 byte in COER
-    # ee_type stores the bit pattern: 0x80 = {app}, 0x40 = {enrol}, 0xC0 = {app, enrol}
-    ee_type_byte  = pgp.ee_type if pgp.ee_type is not None else 0x80
-    return subject_perms + chain_depth + depth_range + bytes([ee_type_byte])
-
-
-def encode_seq_of_psid_group_permissions(perms: list) -> bytes:
-    items = b''.join(encode_psid_group_permissions(p) for p in perms)
-    return encode_octet_string(items)
 
 
 # ── IssuerIdentifier encoding ─────────────────────────────────────────────────

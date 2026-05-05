@@ -77,7 +77,7 @@ Typical encoded sizes (with EU-27 region):
 
 ### V2.2.1 — COER format
 
-The alternative format uses Canonical Octet Encoding Rules (ITU-T X.696) per IEEE Std 1609.2-2022/2025, ETSI TS 103 097 V2.2.1. Select with `--etsi-version v2`.
+The alternative format uses Canonical Octet Encoding Rules (ITU-T X.696) per IEEE Std 1609.2-2022/2025, ETSI TS 103 097 V2.2.1. Select with `--etsi-version v3`.
 
 ---
 
@@ -98,7 +98,7 @@ Dependencies: `cryptography`, `tinyec>=0.4.0`
 python3 cli.py init --output pki-output --algo p256 --region 65535
 
 # Alternative: V2.2.1 COER format
-python3 cli.py init --output pki-output --etsi-version v2
+python3 cli.py init --output pki-output --etsi-version v3
 ```
 
 This creates:
@@ -235,7 +235,7 @@ EtsiTs103097Certificate
   HashedId8       : a82fad24d8d66bd4
 ```
 
-Override auto-detection with `--etsi-version v1|v2` if needed.
+Override auto-detection with `--etsi-version v2|v3` if needed.
 
 ### 11. Verify a certificate
 
@@ -421,7 +421,7 @@ at_priv_n = bke_expand_private_key(caterpillar_priv, expansion_values[n])
 
 Run `python3 cli.py <command> --help` for all options.
 
-The `--etsi-version` flag (`v1` or `v2`) is accepted by `init`, `verify-sig`, `encrypt`, `verify-cert`, and `info`. For all commands except `init` it is optional — the format is auto-detected from `pki_meta.json` in the certificate's directory tree, defaulting to `v1` if no metadata file is found.
+The `--etsi-version` flag (`v2` or `v3`) is accepted by `init`, `verify-sig`, `encrypt`, `verify-cert`, and `info`. For all commands except `init` it is optional — the format is auto-detected from `pki_meta.json` in the certificate's directory tree, defaulting to `v2` if no metadata file is found.
 
 ---
 
@@ -526,7 +526,7 @@ C-ITS-PKI/
 - AT and EC private keys are always independent key pairs (NFR-SEC-05).
 - BKE caterpillar keys should be generated fresh per batch and never reused across batches, to prevent the AA from linking batches.
 - BKE expansion values `eᵢ` must be stored alongside AT certificates to allow re-derivation of AT private keys from the caterpillar key.
-- The vanetza format (V1.2.1) supports ECDSA/ECIES P-256 only. Use V2.2.1 (`--etsi-version v2`) if P-384 is required.
+- The vanetza format (V1.2.1) supports ECDSA/ECIES P-256 only. Use V2.2.1 (`--etsi-version v3`) if P-384 is required.
 
 ---
 

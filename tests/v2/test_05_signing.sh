@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test 05 — Message Signing (Profiles 10.1, 10.2 — ETSI TS 103 097 V2.2.1)
+# Test 05 — Message Signing (Profiles 8.1, 8.2 — ETSI TS 103 097 V1.2.1)
 # Covers: FR-SN-01 through FR-SN-07, AC-06, AC-07
 
 source "$(dirname "$0")/helpers.sh"
@@ -16,12 +16,12 @@ from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_aa_certificate, issue_authorization_ticket
 from src.signing import sign_cam
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V2_2_1)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 aa_s_priv, aa_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 aa_e_priv, aa_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V2_2_1)
+aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V2_2_1)
+at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 cam_payload = b'CAM_PAYLOAD_v1_test'
 signed = sign_cam(cam_payload, at_priv, at.encoded)
 assert signed is not None and len(signed) > 100
@@ -36,12 +36,12 @@ from src.types import PublicKeyAlgorithm, ItsAid, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_aa_certificate, issue_authorization_ticket
 from src.signing import sign_cam, verify_signed_data
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V2_2_1)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 aa_s_priv, aa_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 aa_e_priv, aa_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V2_2_1)
+aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V2_2_1)
+at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 cam_payload = b'AC-06 CAM test payload'
 signed = sign_cam(cam_payload, at_priv, at.encoded, use_digest=True)
 # Verify using AT public key
@@ -62,12 +62,12 @@ from src.types import PublicKeyAlgorithm, ItsAid, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_aa_certificate, issue_authorization_ticket
 from src.signing import sign_denm, verify_signed_data
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V2_2_1)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 aa_s_priv, aa_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 aa_e_priv, aa_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V2_2_1)
+aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V2_2_1)
+at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 denm_payload = b'AC-07 DENM test payload'
 # Berlin coordinates in 0.1 microdegree units
 lat = int(52.5200 * 10_000_000)
@@ -92,12 +92,12 @@ from src.certificates import issue_root_ca_certificate, issue_aa_certificate, is
 from src.signing import sign_cam, verify_signed_data
 from src.crypto import load_public_key_from_compressed
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V2_2_1)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 aa_s_priv, aa_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 aa_e_priv, aa_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V2_2_1)
+aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V2_2_1)
+at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 signed = sign_cam(b'test', at_priv, at.encoded)
 vk = at.tbs.verify_key_indicator
 pub_key = load_public_key_from_compressed(vk.point.curve, vk.point.compressed)
@@ -114,12 +114,12 @@ from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate, issue_aa_certificate, issue_authorization_ticket
 from src.signing import sign_data_external_payload
 rca_priv, rca_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V2_2_1)
+rca = issue_root_ca_certificate('TestRootCA', rca_priv, rca_pub, version=EtsiVersion.V1_2_1)
 aa_s_priv, aa_s_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 aa_e_priv, aa_e_pub = generate_keypair(PublicKeyAlgorithm.ECIES_NIST_P256)
-aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V2_2_1)
+aa = issue_aa_certificate('TestAA', aa_s_priv, aa_s_pub, aa_e_pub, rca, rca_priv, version=EtsiVersion.V1_2_1)
 at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
-at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V2_2_1)
+at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 external_data = b'large_external_payload_data'
 payload_hash = sha256(external_data)
 signed = sign_data_external_payload(payload_hash, 36, at_priv, at.encoded)

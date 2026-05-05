@@ -17,26 +17,13 @@ from .crypto import (
     ecdsa_sign, ecdsa_verify, hash_certificate, hash_data,
     public_key_to_point, sha256, sha384
 )
-from .encoding import encode_signature, decode_signature
+from .encoding import encode_signature, decode_signature, encode_psid, decode_psid
 
 
 # ── ITS message types (per profile) ──────────────────────────────────────────
 
 PSID_CAM  = ItsAid.CAM
 PSID_DENM = ItsAid.DENM
-
-
-def _encode_psid(psid: int) -> bytes:
-    """PSID variable-length encoding (1-4 bytes)."""
-    if psid < 0x80:
-        return bytes([psid])
-    elif psid < 0x4000:
-        return bytes([0x80 | (psid >> 8), psid & 0xFF])
-    elif psid < 0x200000:
-        return bytes([0xC0 | (psid >> 16), (psid >> 8) & 0xFF, psid & 0xFF])
-    else:
-        return bytes([0xE0 | (psid >> 24), (psid >> 16) & 0xFF,
-                      (psid >> 8) & 0xFF, psid & 0xFF])
 
 
 def _encode_generation_time(ts_us: int) -> bytes:
@@ -65,7 +52,7 @@ def encode_header_info(psid: int,
       inlineP2pcdRequest    SequenceOfHashedId3 OPTIONAL,
       requestedCertificate  Certificate OPTIONAL,
     """
-    psid_enc = _encode_psid(psid)
+    psid_enc = encode_psid(psid)
     gen_time_enc = _encode_generation_time(generation_time_us)
 
     # Optional fields bitmask: generationTime(0) expiry(1) location(2) encKey(6) p2pcd(7) reqCert(8)
@@ -318,7 +305,7 @@ def verify_signed_data(signed_data_bytes: bytes,
             return {'valid': False, 'error': f'Unsupported payload choice {payload_choice}'}
 
         # Parse HeaderInfo: psid (variable), then bitmap, then gen_time
-        psid, offset = _decode_psid(signed_data_bytes, offset)
+        psid, offset = decode_psid(signed_data_bytes, offset)
         bitmap = int.from_bytes(signed_data_bytes[offset:offset+2], 'big'); offset += 2
         gen_time = int.from_bytes(signed_data_bytes[offset:offset+8], 'big'); offset += 8
 
@@ -401,15 +388,3 @@ def _make_ieee1609dot2_data(content: bytes) -> bytes:
     return bytes([3]) + content
 
 
-def _decode_psid(data: bytes, offset: int):
-    """Decode variable-length PSID."""
-    b0 = data[offset]
-    if b0 < 0x80:
-        return b0, offset + 1
-    elif b0 < 0xC0:
-        return ((b0 & 0x3F) << 8) | data[offset+1], offset + 2
-    elif b0 < 0xE0:
-        return (((b0 & 0x1F) << 16) | (data[offset+1] << 8) | data[offset+2]), offset + 3
-    else:
-        return (((b0 & 0x0F) << 24) | (data[offset+1] << 16) |
-                (data[offset+2] << 8) | data[offset+3]), offset + 4

@@ -288,6 +288,75 @@ class Certificate:
     encoded: bytes = field(default_factory=bytes, repr=False)
 
 
+# ── Vanetza v2 wire-format constants ─────────────────────────────────────────
+# These mirror the C++ enums in vanetza/security/v2/*.hpp.
+# Kept here (alongside other protocol enums) so that v1_encoding.py is purely
+# a codec module and does not double as a type-definition file.
+
+class V1SubjectType:
+    """vanetza SubjectType (subject_info.hpp)."""
+    ENROLLMENT_CREDENTIAL   = 0
+    AUTHORIZATION_TICKET    = 1
+    AUTHORIZATION_AUTHORITY = 2
+    ENROLLMENT_AUTHORITY    = 3
+    ROOT_CA                 = 4
+    CRL_SIGNER              = 5
+
+
+class V1SignerInfoType:
+    """vanetza SignerInfoType (signer_info.hpp)."""
+    SELF                           = 0
+    CERTIFICATE_DIGEST_WITH_SHA256 = 1
+    CERTIFICATE                    = 2
+    CERTIFICATE_CHAIN              = 3
+
+
+class V1EccPointType:
+    """vanetza EccPointType (ecc_point.hpp)."""
+    X_COORDINATE_ONLY  = 0
+    COMPRESSED_LSB_Y_0 = 2
+    COMPRESSED_LSB_Y_1 = 3
+    UNCOMPRESSED       = 4
+
+
+class V1PublicKeyAlgorithm:
+    """vanetza PublicKeyAlgorithm (public_key.hpp)."""
+    ECDSA_NISTP256_WITH_SHA256 = 0
+    ECIES_NISTP256             = 1
+
+
+class V1SubjectAttributeType:
+    """vanetza SubjectAttributeType (subject_attribute.hpp)."""
+    VERIFICATION_KEY = 0
+    ENCRYPTION_KEY   = 1
+    ASSURANCE_LEVEL  = 2
+    ITS_AID_LIST     = 32   # 0x20
+    ITS_AID_SSP_LIST = 33   # 0x21
+
+
+class V1ValidityRestrictionType:
+    """vanetza ValidityRestrictionType (validity_restriction.hpp)."""
+    TIME_END                = 0
+    TIME_START_AND_END      = 1
+    TIME_START_AND_DURATION = 2
+    REGION                  = 3
+
+
+class V1RegionType:
+    """vanetza RegionType (region.hpp)."""
+    NONE      = 0
+    CIRCLE    = 1
+    RECTANGLE = 2
+    POLYGON   = 3
+    ID        = 4
+
+
+class V1RegionDictionary:
+    """vanetza RegionDictionary (region.hpp)."""
+    ISO_3166_1 = 0
+    UN_STATS   = 1
+
+
 @dataclass
 class KeyPair:
     """An ECDSA or ECIES key pair with associated certificate."""

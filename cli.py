@@ -5,7 +5,7 @@ Supports ETSI TS 103 097 V1.2.1 and V2.2.1 / IEEE Std 1609.2-2025.
 
 Usage:
     python cli.py init        [--output DIR] [--algo p256|p384] [--region 65535]
-                              [--etsi-version v1|v2]
+                              [--etsi-version v2|v3]
     python cli.py enrol       --output DIR --name ITS_NAME [--ec-validity 1]
     python cli.py issue-at    --output DIR [--psid 36,37] [--at-validity 168] [--at-output DIR]
     python cli.py butterfly-at --output DIR [--count 8] [--psid 36,37] [--at-validity 168]
@@ -38,11 +38,11 @@ def main():
     p_init.add_argument('--output', '-o', default='pki-output', help='Output directory')
     p_init.add_argument('--algo', choices=['p256', 'p384'], default='p256')
     p_init.add_argument('--region', default='65535', help='Comma-separated region IDs (65535=EU-27)')
-    p_init.add_argument('--etsi-version', choices=['v1', 'v2'], default='v1',
+    p_init.add_argument('--etsi-version', choices=['v2', 'v3'], default='v2',
                         dest='etsi_version',
                         help='ETSI TS 103 097 standard version: '
-                             'v1 = V1.2.1 vanetza-compatible binary format [default], '
-                             'v2 = V2.2.1 COER format (IEEE 1609.2-2022/2025)')
+                             'v2 = V1.2.1 vanetza-compatible binary format [default], '
+                             'v3 = V2.2.1 COER format (IEEE 1609.2-2022/2025)')
     p_init.add_argument('--root-name', default='C-ITS-Root-CA')
     p_init.add_argument('--tlm-name', default='C-ITS-TLM')
     p_init.add_argument('--ea-name', default='C-ITS-EA')
@@ -98,10 +98,10 @@ def main():
                         help='Root CA certificate for chain verification')
     p_vcam.add_argument('--aa', default=None,
                         help='AA certificate for chain verification')
-    p_vcam.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+    p_vcam.add_argument('--etsi-version', choices=['v2', 'v3'], default=None,
                         dest='etsi_version',
                         help='ETSI TS 103 097 version of the certificate files '
-                             '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
+                             '(auto-detected from pki_meta.json if omitted, otherwise defaults to v2)')
     
     # encrypt
     p_enc = sub.add_parser('encrypt', help='Encrypt a payload for a recipient')
@@ -109,10 +109,10 @@ def main():
     p_enc.add_argument('--enc-key', required=True, help='Recipient encryption private key (PEM)')
     p_enc.add_argument('--payload', required=True)
     p_enc.add_argument('--output', '-o')
-    p_enc.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+    p_enc.add_argument('--etsi-version', choices=['v2', 'v3'], default=None,
                        dest='etsi_version',
                        help='ETSI TS 103 097 version of the certificate '
-                            '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
+                            '(auto-detected from pki_meta.json if omitted, otherwise defaults to v2)')
 
     # decrypt
     p_dec = sub.add_parser('decrypt', help='Decrypt an encrypted message')
@@ -126,18 +126,18 @@ def main():
     p_ver.add_argument('--cert', required=True)
     p_ver.add_argument('--issuer', help='Issuer certificate (omit for self-signed)')
     p_ver.add_argument('--root', help='Root CA certificate')
-    p_ver.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+    p_ver.add_argument('--etsi-version', choices=['v2', 'v3'], default=None,
                        dest='etsi_version',
                        help='ETSI TS 103 097 version used to encode the certificate '
-                            '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
+                            '(auto-detected from pki_meta.json if omitted, otherwise defaults to v2)')
 
     # info
     p_info = sub.add_parser('info', help='Display certificate information')
     p_info.add_argument('--cert', required=True)
-    p_info.add_argument('--etsi-version', choices=['v1', 'v2'], default=None,
+    p_info.add_argument('--etsi-version', choices=['v2', 'v3'], default=None,
                         dest='etsi_version',
                         help='ETSI TS 103 097 version used to encode the certificate '
-                             '(auto-detected from pki_meta.json if omitted, otherwise defaults to v1)')
+                             '(auto-detected from pki_meta.json if omitted, otherwise defaults to v2)')
 
     args = parser.parse_args()
 
@@ -158,12 +158,12 @@ def main():
 
 def _detect_version_from_cert_path(cert_path: Path, explicit_version: str = None) -> str:
     """
-    Determine the ETSI version string ('v1' or 'v2') to use for decoding a cert.
+    Determine the ETSI version string ('v2' or 'v3') to use for decoding a cert.
 
     Priority:
       1. Explicit --etsi-version argument (if supplied).
       2. pki_meta.json found in the cert's directory or up to 3 parent directories.
-      3. Default: 'v1' (vanetza-compatible format).
+      3. Default: 'v2' (vanetza-compatible format).
     """
     if explicit_version is not None:
         return explicit_version
@@ -177,7 +177,7 @@ def _detect_version_from_cert_path(cert_path: Path, explicit_version: str = None
                 meta = json.loads(meta_path.read_text())
                 ev = meta.get('etsi_version')
                 if ev is not None:
-                    return 'v1' if int(ev) == 1 else 'v2'
+                    return 'v2' if int(ev) == 1 else 'v3'
             except Exception:
                 pass
         parent = search.parent
@@ -185,7 +185,7 @@ def _detect_version_from_cert_path(cert_path: Path, explicit_version: str = None
             break
         search = parent
 
-    return 'v1'   # default to vanetza-compatible format
+    return 'v2'   # default to vanetza-compatible format
 
 
 def _get_pki(output_dir: str):
@@ -213,7 +213,7 @@ def cmd_init(args):
 
     algo = PublicKeyAlgorithm.ECDSA_NIST_P256 if args.algo == 'p256' else PublicKeyAlgorithm.ECDSA_NIST_P384
     region_ids = [int(r) for r in args.region.split(',')] if args.region else None
-    ver = EtsiVersion.V1_2_1 if args.etsi_version == 'v1' else EtsiVersion.V2_2_1
+    ver = EtsiVersion.V1_2_1 if args.etsi_version == 'v2' else EtsiVersion.V2_2_1
 
     pki = CITSPKI(algorithm=algo, region_ids=region_ids, version=ver)
     certs = pki.initialise(
@@ -498,7 +498,7 @@ def cmd_verify_sig(args):
     # ── Detect certificate encoding version ───────────────────────────────────
     at_cert_path = Path(args.at_cert)
     ver_str = _detect_version_from_cert_path(at_cert_path, args.etsi_version)
-    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v2' else EtsiVersion.V2_2_1
 
     def _load_cert(path: Path):
         """Load and decode a certificate using the detected version."""
@@ -667,7 +667,7 @@ def cmd_encrypt(args):
 
     enc_cert_path = Path(args.enc_cert)
     ver_str = _detect_version_from_cert_path(enc_cert_path, args.etsi_version)
-    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v2' else EtsiVersion.V2_2_1
 
     enc_cert_bytes = enc_cert_path.read_bytes()
     if ver == EtsiVersion.V1_2_1:
@@ -728,7 +728,7 @@ def cmd_verify_cert(args):
 
     cert_path = Path(args.cert)
     ver_str = _detect_version_from_cert_path(cert_path, args.etsi_version)
-    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v2' else EtsiVersion.V2_2_1
 
     cert_bytes = cert_path.read_bytes()
 
@@ -814,7 +814,7 @@ def cmd_info(args):
 
     cert_path = Path(args.cert)
     ver_str = _detect_version_from_cert_path(cert_path, args.etsi_version)
-    ver = EtsiVersion.V1_2_1 if ver_str == 'v1' else EtsiVersion.V2_2_1
+    ver = EtsiVersion.V1_2_1 if ver_str == 'v2' else EtsiVersion.V2_2_1
 
     cert_bytes = cert_path.read_bytes()
 
