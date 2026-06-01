@@ -6,6 +6,12 @@ OUTPUT_DIR=${VAR:-"./vnap-certs"}
 
 PYTHON="uv run python"
 
+# Number of butterfly expansion tickets to generate
+NUM_TICKETS=8
+
+# Cert directory used by simulation
+TARGET_DIR="/Users/josephhunt/COIMBRA/vnap-secure/vnap-certs/c-its-pki"
+
 # ── PKI project root ──────────────────────────────────────────────────────────
 PKI_ROOT="$(pwd)"
 PKI_CMD="$PYTHON $PKI_ROOT/cli.py"
@@ -34,9 +40,12 @@ gen_vnap_certs() {
   echo; echo; echo "Generating ETSI $ETSI_VERSION certs for vanetza-nap..."; echo
   init_pki
   issue_auth_ticket
+  issue_bke_tickets
+set -x
+  rm $TARGET_DIR/*.cert $TARGET_DIR/*.der
+  cp $OUTPUT_DIR/*.cert $OUTPUT_DIR/bke-tickets/*.cert $OUTPUT_DIR/*.der $TARGET_DIR
 exit
   enroll_its_station
-  issue_bke_tickets
   sign_and_verify_a_cam
   sign_and_verify_a_denm
   encrypt_a_message
@@ -48,7 +57,6 @@ init_pki() {
   uv sync
   $PKI_CMD init --output $OUTPUT_DIR \
                 --algo p256 \
-                --region 65535 \
                 --etsi-version $ETSI_VERSION
   echo; echo; echo "######################"
   echo "Root cert:"
@@ -94,10 +102,7 @@ issue_auth_ticket() {
                        --issuer $SIGN_KEY  \
                        --etsi-version $ETSI_VERSION
 
-  echo "Converting private key PEM format to DER format accepted by Vanetza-NAP..."
-  mv $OUTPUT_DIR/tickets/at_*_sign.key $OUTPUT_DIR/at_sign.key
-  openssl pkcs8 -topk8 -nocrypt -in $OUTPUT_DIR/at_sign.key \
-				-outform DER -out $OUTPUT_DIR/at.der
+  mv $OUTPUT_DIR/tickets/at_*_sign.key $OUTPUT_DIR/at.der
   openssl pkey -in $OUTPUT_DIR/at.der -inform DER -text -noout
 }
 
@@ -108,7 +113,7 @@ issue_bke_tickets() {
   echo "Issue BKE Authorization Tickets"
   rm -rf $OUTPUT_DIR/bke-tickets
   $PKI_CMD butterfly-at --output $OUTPUT_DIR \
-                        --count 8 \
+                        --count $NUM_TICKETS \
                         --psid 36,37 \
                         --validity 168
   AUTH_TICKET=$(ls $OUTPUT_DIR/bke-tickets/bke_at_0.cert)
@@ -119,6 +124,11 @@ issue_bke_tickets() {
   $PKI_CMD verify-cert --cert $AUTH_TICKET \
                        --issuer $SIGN_KEY  \
                        --etsi-version $ETSI_VERSION
+  index=$(($NUM_TICKETS - 1))
+  for i in $(seq 0 $index); do
+    mv $OUTPUT_DIR/bke-tickets/bke_at_${i}_sign.key $OUTPUT_DIR/bke_at_${i}_sign.der
+    openssl pkey -in $OUTPUT_DIR/bke_at_${i}_sign.der -inform DER -text -noout
+  done
 }
 
 #===================================
@@ -142,7 +152,7 @@ sign_and_verify_a_cam() {
   echo "Sign & verify a CAM"
   echo -n "CAM_PAYLOAD" > cam.bin
   AUTH_TICKET=$OUTPUT_DIR/at.cert
-  SIGN_KEY=$OUTPUT_DIR/at_sign.key
+  SIGN_KEY=$OUTPUT_DIR/at.der
   $PKI_CMD sign-cam --at-key $SIGN_KEY \
                     --at-cert $AUTH_TICKET \
                     --payload cam.bin \
@@ -168,7 +178,7 @@ sign_and_verify_a_denm() {
   echo "Sign & verify a DENM"
   echo -n "DENM_PAYLOAD" > denm.bin
   AUTH_TICKET=$OUTPUT_DIR/at.cert
-  SIGN_KEY=$OUTPUT_DIR/at_sign.key
+  SIGN_KEY=$OUTPUT_DIR/at.der
   $PKI_CMD sign-denm --at-key $SIGN_KEY \
                      --at-cert $AUTH_TICKET \
                      --payload denm.bin \

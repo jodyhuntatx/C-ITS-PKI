@@ -307,12 +307,12 @@ def load_public_key_from_compressed(curve_name: str, compressed: bytes) -> Ellip
     return EllipticCurvePublicKey.from_encoded_point(curve, compressed)
 
 def serialize_private_key(priv_key: EllipticCurvePrivateKey) -> bytes:
-    """Serialize private key to PEM (for storage)."""
+    """Serialize private key to PKCS8 DER (for storage)."""
     return priv_key.private_bytes(
-        serialization.Encoding.PEM,
+        serialization.Encoding.DER,
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption()
     )
 
-def deserialize_private_key(pem: bytes) -> EllipticCurvePrivateKey:
-    return serialization.load_pem_private_key(pem, password=None, backend=default_backend())
+def deserialize_private_key(der: bytes) -> EllipticCurvePrivateKey:
+    return serialization.load_der_private_key(der, password=None, backend=default_backend())

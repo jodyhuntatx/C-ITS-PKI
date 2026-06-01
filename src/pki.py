@@ -242,7 +242,7 @@ class CITSPKI:
                 'sign_priv_key': at_priv,
                 'sign_pub_key': at_priv.public_key(),
                 'expansion_value': e_i,
-                'priv_key_pem': serialize_private_key(at_priv),
+                'priv_key_der': serialize_private_key(at_priv),
             })
         return results
     
@@ -257,7 +257,7 @@ class CITSPKI:
         Enrol an ITS-Station and issue an Enrolment Credential (EC).
         Per Appendix A.2 of the PRD.
 
-        Returns dict with 'ec' (COER bytes) and 'priv_key' (PEM bytes).
+        Returns dict with 'ec' (COER bytes) and 'priv_key' (DER bytes).
         """
         if self.ea is None:
             raise RuntimeError("PKI not initialised. Call initialise() first.")
@@ -283,7 +283,7 @@ class CITSPKI:
             'certificate': ec,
             'sign_priv_key': its_sign_priv,
             'sign_pub_key': its_sign_pub,
-            'priv_key_pem': serialize_private_key(its_sign_priv),
+            'priv_key_der': serialize_private_key(its_sign_priv),
         }
 
     # ── Authorization Ticket Provisioning ────────────────────────────────────
@@ -328,7 +328,7 @@ class CITSPKI:
             'certificate': at,
             'sign_priv_key': at_sign_priv,
             'sign_pub_key': at_sign_pub,
-            'priv_key_pem': serialize_private_key(at_sign_priv),
+            'priv_key_der': serialize_private_key(at_sign_priv),
         }
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ class CITSPKI:
             cert_path = out / f"{entity_name}.cert"
             cert_path.write_bytes(entity.certificate.encoded)
 
-            # Save signing private key (PEM)
+            # Save signing private key (DER)
             key_path = out / f"{entity_name}_sign.key"
             key_path.write_bytes(serialize_private_key(entity.sign_priv_key))
 

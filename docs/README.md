@@ -105,15 +105,15 @@ This creates:
 ```
 pki-output/
 ├── root_ca.cert         # Root CA (self-signed)
-├── root_ca_sign.key     # Root CA signing key (PEM)
+├── root_ca_sign.key     # Root CA signing key (PKCS8 DER)
 ├── tlm.cert             # Trust List Manager certificate
-├── tlm_sign.key         # TLM signing key
+├── tlm_sign.key         # TLM signing key (PKCS8 DER)
 ├── ea.cert              # Enrolment Authority certificate
-├── ea_sign.key          # EA signing key
-├── ea_enc.key           # EA encryption key
+├── ea_sign.key          # EA signing key (PKCS8 DER)
+├── ea_enc.key           # EA encryption key (PKCS8 DER)
 ├── aa.cert              # Authorization Authority certificate
-├── aa_sign.key          # AA signing key
-├── aa_enc.key           # AA encryption key
+├── aa_sign.key          # AA signing key (PKCS8 DER)
+├── aa_enc.key           # AA encryption key (PKCS8 DER)
 └── pki_meta.json        # PKI metadata (algorithm, region, etsi_version, entities)
 ```
 
@@ -125,7 +125,7 @@ python3 cli.py enrol --output pki-output --name "ITS-Station-001"
 
 Output in `pki-output/its-stations/ITS-Station-001/`:
 - `ec.cert` — Enrolment Credential
-- `ec_sign.key` — EC signing private key (PEM)
+- `ec_sign.key` — EC signing private key (PKCS8 DER)
 
 ### 4. Issue an Authorization Ticket
 
@@ -135,7 +135,7 @@ python3 cli.py issue-at --output pki-output --psid 36,37 --validity 168
 
 Output in `pki-output/tickets/`:
 - `at_<ts>.cert` — Authorization Ticket (pseudonymous)
-- `at_<ts>_sign.key` — AT signing private key (PEM)
+- `at_<ts>_sign.key` — AT signing private key (PKCS8 DER)
 
 ### 5. Issue a BKE batch of Authorization Tickets
 
@@ -144,9 +144,9 @@ python3 cli.py butterfly-at --output pki-output --count 8 --validity 168
 ```
 
 Output in `pki-output/bke-tickets/`:
-- `caterpillar_sign.key` — Caterpillar private key (keep secret, one per batch)
+- `caterpillar_sign.key` — Caterpillar private key (PKCS8 DER; keep secret, one per batch)
 - `bke_at_N.cert` — AT certificate N (pseudonymous)
-- `bke_at_N_sign.key` — AT N signing private key (derived from caterpillar key)
+- `bke_at_N_sign.key` — AT N signing private key (PKCS8 DER; derived from caterpillar key)
 - `bke_at_N.expansion` — Expansion value eᵢ used to derive AT N
 
 The AA derives each AT public key as `Sᵢ = Cf + H(Cf‖eᵢ)·G` without ever
@@ -318,7 +318,7 @@ bke_tickets = pki.issue_butterfly_authorization_tickets(
     validity_hours=168,
 )
 # Each entry: {'at', 'certificate', 'sign_priv_key', 'sign_pub_key',
-#              'expansion_value', 'priv_key_pem'}
+#              'expansion_value', 'priv_key_der'}
 ```
 
 ### Decode a vanetza-format certificate
@@ -519,7 +519,7 @@ C-ITS-PKI/
 
 ## Security Notes
 
-- Private keys are stored as PEM (PKCS#8). In production, use an HSM (NFR-SEC-01).
+- Private keys are stored as unencrypted PKCS#8 DER. In production, use an HSM (NFR-SEC-01).
 - All random number generation uses Python's `os.urandom()` (system CSPRNG).
 - AES-CCM nonces are freshly generated per encryption operation (NFR-SEC-04).
 - AT certificate `id = none` ensures pseudonymity (NFR-SEC-06).

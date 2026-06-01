@@ -4,7 +4,7 @@ C-ITS PKI Command-Line Interface
 Supports ETSI TS 103 097 V1.2.1 and V2.2.1 / IEEE Std 1609.2-2025.
 
 Usage:
-    python cli.py init        [--output DIR] [--algo p256|p384] [--region 65535]
+    python cli.py init        [--output DIR] [--algo p256|p384] [--region REGION_IDS]
                               [--etsi-version v2|v3]
     python cli.py enrol       --output DIR --name ITS_NAME [--ec-validity 1]
     python cli.py issue-at    --output DIR [--psid 36,37] [--at-validity 168] [--at-output DIR]
@@ -37,7 +37,7 @@ def main():
     p_init = sub.add_parser('init', help='Initialise PKI hierarchy')
     p_init.add_argument('--output', '-o', default='pki-output', help='Output directory')
     p_init.add_argument('--algo', choices=['p256', 'p384'], default='p256')
-    p_init.add_argument('--region', default='65535', help='Comma-separated region IDs (65535=EU-27)')
+    p_init.add_argument('--region', default=None, help='Comma-separated region IDs (e.g. 65535=EU-27); omit for no region restriction')
     p_init.add_argument('--etsi-version', choices=['v2', 'v3'], default='v2',
                         dest='etsi_version',
                         help='ETSI TS 103 097 standard version: '
@@ -256,7 +256,7 @@ def cmd_enrol(args):
     # We only need ea_cert.encoded for hashing (to compute the issuer digest);
     # full decoding is not required.
     ea_cert_bytes = (out_dir / 'ea.cert').read_bytes()
-    ea_priv_pem = (out_dir / 'ea_sign.key').read_bytes()
+    ea_priv_der = (out_dir / 'ea_sign.key').read_bytes()
 
     from src.types import (
         Certificate, CertificateType, IssuerIdentifier, ToBeSignedCertificate,
@@ -273,7 +273,7 @@ def cmd_enrol(args):
     )
     ea_cert.encoded = ea_cert_bytes
 
-    ea_priv_key = deserialize_private_key(ea_priv_pem)
+    ea_priv_key = deserialize_private_key(ea_priv_der)
 
     its_sign_priv, its_sign_pub = generate_keypair(algo)
     ec = issue_enrolment_credential(
@@ -313,7 +313,7 @@ def cmd_issue_at(args):
     ver = EtsiVersion(meta.get('etsi_version', int(EtsiVersion.V1_2_1)))
 
     aa_cert_bytes = (out_dir / 'aa.cert').read_bytes()
-    aa_priv_pem = (out_dir / 'aa_sign.key').read_bytes()
+    aa_priv_der = (out_dir / 'aa_sign.key').read_bytes()
 
     # We only need aa_cert.encoded for hashing (issuer digest); skip full decode.
     from src.types import (
@@ -331,7 +331,7 @@ def cmd_issue_at(args):
     )
     aa_cert.encoded = aa_cert_bytes
 
-    aa_priv_key = deserialize_private_key(aa_priv_pem)
+    aa_priv_key = deserialize_private_key(aa_priv_der)
 
     psids = [PsidSsp(psid=int(p)) for p in args.psid.split(',')] if args.psid else None
 
@@ -372,7 +372,7 @@ def cmd_butterfly_at(args):
     algo = PublicKeyAlgorithm(meta['algorithm'])
     ver = EtsiVersion(meta.get('etsi_version', int(EtsiVersion.V1_2_1)))
     aa_cert_bytes = (out_dir / 'aa.cert').read_bytes()
-    aa_priv_pem   = (out_dir / 'aa_sign.key').read_bytes()
+    aa_priv_der   = (out_dir / 'aa_sign.key').read_bytes()
 
     # We only need aa_cert.encoded for hashing (issuer digest); skip full decode.
     from src.types import (
@@ -386,7 +386,7 @@ def cmd_butterfly_at(args):
     aa_cert = _Cert(version=2, cert_type=_CT.EXPLICIT, issuer=_II(_IC.SELF), tbs=_dummy_tbs)
     aa_cert.encoded = aa_cert_bytes
 
-    aa_priv_key = deserialize_private_key(aa_priv_pem)
+    aa_priv_key = deserialize_private_key(aa_priv_der)
     psids = [PsidSsp(psid=int(p)) for p in args.psid.split(',')] if args.psid else None
 
     cat_priv, cat_pub = generate_keypair(algo)
