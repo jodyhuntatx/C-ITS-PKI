@@ -32,7 +32,7 @@ decisions for gaps and ambiguities in the specifications are in
 | **E7** | End-to-end workflow script | All CLI workflows for both formats, including full-chain `verify-sig` and decrypt-then-verify | `bash gen-verify.sh` | exit 0; 20 × VALID, 0 × INVALID |
 | **E8** | Vanetza `certify show-certificate` | v2 certificates parse in Vanetza's v2 decoder | `certify show-certificate <file>` in the Vanetza image | parses Root, AA, AT, butterfly AT |
 | **E9** | Latency measurement | NFR-PER budgets | benchmark in section 7.3 | far below budget |
-| **E10** | Stock Vanetza-NAP (`vnap:r2-stock`, without the vnap-secure assurance patch) live simulation | v2 certificates meet Vanetza's unmodified TS 103 097 V1.2.1 checks (KD-1) | `CERTS_DIR=… PKI_SECURITY=certs-v2 ./run-r2-sim.sh c-its-pki vnap:r2-stock` | OBU: 15/15 `Success` for RSU CAMs (before KD-1 was fixed: all rejected). The RSU direction shows the stock image's clock bug (`Invalid_Timestamp`), unrelated to certificates |
+| **E10** | Stock Vanetza-NAP (local image `vnap:r2-stock`, built from unmodified `release2-main` except the Debian mirror fix; no vnap-secure assurance patch) live simulation | v2 certificates meet Vanetza's unmodified TS 103 097 V1.2.1 checks (KD-1) | `CERTS_DIR=… PKI_SECURITY=certs-v2 ./run-r2-sim.sh c-its-pki vnap:r2-stock` | OBU: 15/15 `Success` for RSU CAMs (before KD-1 was fixed: all rejected). The RSU direction shows the stock image's clock bug (`Invalid_Timestamp`), unrelated to certificates |
 
 **E5: Vanetza verification of tool output** (`vnap-msgcheck`, Vanetza-NAP release2 + vnap-secure patches):
 

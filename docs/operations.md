@@ -281,13 +281,14 @@ What each test demonstrates is mapped to requirements in [compliance](compliance
 
 ## 8. Using the output with Vanetza-NAP
 
-The tool is validated against Vanetza-NAP [R24] with the vnap-secure harness [R30]
-(`vnap-docker-r2/`):
+The tool is validated against Vanetza-NAP [R24] with the vnap-secure harness [R30]. Build
+the patched image `vnap:latest` there with `./docker-build.sh`; see the vnap-secure
+`README.md`. Run the commands below from vnap-secure's `vnap-docker/` directory:
 
 ```bash
 # live simulation: RSU (regular AT) and OBU (butterfly AT) exchange signed CAMs
-NATIVE=1 ./run-r2-sim.sh c-its-pki vnap:r2-p3              # v3 files in vnap-certs/c-its-pki
-CERTS_DIR=/path/to/set PKI_SECURITY=certs-v2 NATIVE=1 ./run-r2-sim.sh c-its-pki vnap:r2-p3
+NATIVE=1 ./run-r2-sim.sh c-its-pki vnap:latest             # v3 files in vnap-certs/c-its-pki
+CERTS_DIR=/path/to/set PKI_SECURITY=certs-v2 NATIVE=1 ./run-r2-sim.sh c-its-pki vnap:latest
 ./check-r2-cams.sh 20                                       # expect "N Success" both ways
 
 # offline: verify or parse one message file with Vanetza's own security stack
@@ -296,7 +297,9 @@ docker run --rm -v DIR:/w vnap:msgcheck decode-v3 /w/cam.enc
 ```
 
 `CERTS_DIR` must contain a `c-its-pki/` subdirectory with the files `gen-vnap-certs.sh`
-produces. `DIR` and `CERTS_DIR` must be under the real `$HOME`, because snap-confined
+produces. Alternatively, vnap-secure's `start-vnap.sh` runs the same RSU/OBU pair with
+docker-compose (`EXEC_DIR=~/vnap-run ./start-vnap.sh`). `vnap:msgcheck` is built with
+`vnap-docker/msgcheck/build-msgcheck.sh`. `DIR` and `CERTS_DIR` must be under the real `$HOME`, because snap-confined
 Docker cannot read `/mnt/hgfs` or dot-directories.
 
 ## 9. Troubleshooting

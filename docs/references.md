@@ -75,4 +75,4 @@ published bibliographic data.
 
 <a id="r29"></a>**[R29]** alexmgr (GitHub). *tinyec* 0.4.0 — elliptic curve arithmetic in pure Python. <https://github.com/alexmgr/tinyec>
 
-<a id="r30"></a>**[R30]** *vnap-secure* companion repository: Vanetza-NAP build and simulation harness, including `vnap-docker-r2/run-r2-sim.sh`, `check-r2-cams.sh` and the message checker `vnap-docker-r2/msgcheck/vnap-msgcheck.cpp` (built as `vnap:msgcheck` with `build-msgcheck.sh`).
+<a id="r30"></a>**[R30]** *vnap-secure* companion repository (branch `jodyhuntatx`): Vanetza-NAP release2 patch set (`vnap-patches/`, `vnap-origs/`) and build (`docker-build.sh` → `vnap:latest`); simulation harness `start-vnap.sh` (docker-compose) and `vnap-docker/run-r2-sim.sh`, `vnap-docker/check-r2-cams.sh`; and the message checker `vnap-docker/msgcheck/vnap-msgcheck.cpp` (built as `vnap:msgcheck` with `vnap-docker/msgcheck/build-msgcheck.sh`). Documented in its `README.md`.
