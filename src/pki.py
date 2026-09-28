@@ -202,28 +202,65 @@ class CITSPKI:
             'aa': aa_cert.encoded,
         }
 
-    # ── Butterfly Key Expansion AT Batch Provisioning ─────────────────────────
+    # ── Butterfly Key Mechanism AT Batch Provisioning ─────────────────────────
     def issue_butterfly_authorization_tickets(
         self,
         caterpillar_sign_priv,
-        expansion_values: list,
+        sign_expansion_key: bytes,
+        i_value: int,
+        count: int,
+        mode: str = 'original',
+        caterpillar_enc_priv=None,
+        enc_expansion_key: Optional[bytes] = None,
         app_psids: Optional[list] = None,
         validity_hours: int = 168,
         region_ids: Optional[list] = None,
         start_time: Optional[float] = None,
     ) -> list:
         """
-        Issue a batch of ATs via BKE (IEEE 1609.2a §6.4.3.7).
-        Returns list of dicts: at, certificate, sign_priv_key, sign_pub_key,
-        expansion_value, priv_key_pem.
+        Run the IEEE 1609.2.1 Butterfly Key Mechanism (ETSI TS 102 941 clause 6.2.3.5)
+        for one batch of `count` ATs in i-period `i_value` (j = 0 .. count-1):
+
+          EA/RA : expands the caterpillar public keys into cocoon keys
+          AA    : adds a random offset r per certificate and certifies pk_cc + r*G
+          EE    : reconstructs sk_bf = sk_cc + r and checks it against the certificate
+
+        mode 'original': separate encryption caterpillar key + expansion key; the AA
+                         response is encrypted to the encryption cocoon key.
+        mode 'unified':  the AA response is encrypted to the signing cocoon key.
+
+        The protocol messages themselves (EeRaCertRequest, encrypted AA responses) are
+        not produced; the key derivations on every side are. Returns a list of dicts:
+        at, certificate, j, offset, sign_priv_key, sign_pub_key, priv_key_der,
+        response_enc_pub.
         """
         if self.aa is None:
             raise RuntimeError("PKI not initialised. Call initialise() first.")
-        from .crypto import bke_expand_private_key
+        from .crypto import (
+            BKE_PURPOSE_ENC, bke_cocoon_private_key, bke_cocoon_public_key,
+            bke_butterfly_private_key,
+        )
+        if mode not in ('original', 'unified'):
+            raise ValueError(f"BKE mode must be 'original' or 'unified', got {mode!r}")
+        if mode == 'original' and (caterpillar_enc_priv is None or enc_expansion_key is None):
+            raise ValueError("BKE original mode needs an encryption caterpillar key and expansion key")
 
-        at_certs = _issue_bke_ats(
-            caterpillar_sign_pub=caterpillar_sign_priv.public_key(),
-            expansion_values=expansion_values,
+        caterpillar_sign_pub = caterpillar_sign_priv.public_key()
+        caterpillar_enc_pub = caterpillar_enc_priv.public_key() if mode == 'original' else None
+        indices = list(range(count))
+
+        # EA/RA: cocoon public keys from the caterpillar public keys and expansion keys
+        cocoon_sign_pubs = [bke_cocoon_public_key(caterpillar_sign_pub, sign_expansion_key, i_value, j)
+                            for j in indices]
+        if mode == 'original':
+            response_enc_pubs = [bke_cocoon_public_key(caterpillar_enc_pub, enc_expansion_key, i_value, j,
+                                                       BKE_PURPOSE_ENC) for j in indices]
+        else:
+            response_enc_pubs = cocoon_sign_pubs
+
+        # AA: butterfly keys with random offsets, certified
+        issued = _issue_bke_ats(
+            cocoon_sign_pubs=cocoon_sign_pubs,
             aa_cert=self.aa.certificate,
             aa_priv_key=self.aa.sign_priv_key,
             app_psids=app_psids,
@@ -233,19 +270,35 @@ class CITSPKI:
             start_time=start_time,
             version=self.version,
         )
+
+        # EE: reconstruct the butterfly private keys and check them against the certificates
+        from .crypto import public_key_to_point
         results = []
-        for cert, e_i in zip(at_certs, expansion_values):
-            at_priv = bke_expand_private_key(caterpillar_sign_priv, e_i)
+        for j, (cert, offset), enc_pub in zip(indices, issued, response_enc_pubs):
+            cocoon_priv = bke_cocoon_private_key(caterpillar_sign_priv, sign_expansion_key, i_value, j)
+            if mode == 'original':
+                enc_priv = bke_cocoon_private_key(caterpillar_enc_priv, enc_expansion_key, i_value, j,
+                                                  BKE_PURPOSE_ENC)
+            else:
+                enc_priv = cocoon_priv
+            if public_key_to_point(enc_priv.public_key()) != public_key_to_point(enc_pub):
+                raise RuntimeError(f"BKE: end entity cannot decrypt the AA response for j={j}")
+            at_priv = bke_butterfly_private_key(cocoon_priv, offset)
+            certified = cert.tbs.verify_key_indicator.point.compressed
+            if public_key_to_point(at_priv.public_key()).compressed != certified:
+                raise RuntimeError(f"BKE: reconstructed private key does not match the certificate for j={j}")
             results.append({
                 'at': cert.encoded,
                 'certificate': cert,
+                'j': j,
+                'offset': offset,
                 'sign_priv_key': at_priv,
                 'sign_pub_key': at_priv.public_key(),
-                'expansion_value': e_i,
                 'priv_key_der': serialize_private_key(at_priv),
+                'response_enc_pub': enc_pub,
             })
         return results
-    
+
     # ── ITS-Station Enrolment ─────────────────────────────────────────────────
 
     def enrol_its_station(self,

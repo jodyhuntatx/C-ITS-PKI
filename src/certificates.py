@@ -16,7 +16,8 @@ from .types import (
 )
 from .encoding import encode_certificate, encode_tbs_certificate
 from .crypto import (
-    generate_keypair, ecdsa_sign, hash_certificate, public_key_to_point
+    generate_keypair, ecdsa_sign, hash_certificate, public_key_to_point,
+    ieee1609_signing_input
 )
 from .v1_encoding import build_and_sign_v1, hash_certificate_v1
 
@@ -41,12 +42,47 @@ def _hash_cert(cert, algorithm: PublicKeyAlgorithm, version: EtsiVersion) -> byt
     return hash_certificate(cert.encoded, algorithm)
 
 
-def _all_permissions() -> list:
+# EndEntityType ::= BIT STRING { app(0), enrol(1) } (SIZE(8)) -> bit 0 is the MSB
+EE_TYPE_APP   = 0x80
+EE_TYPE_ENROL = 0x40
+
+
+def _all_permissions(min_chain_length: int, ee_type: int) -> list:
     """
-    PsidGroupPermissions granting all PSIDs to all end-entity types.
-    subjectPermissions = all, minChainDepth=0, chainDepthRange=0, eeType={app, enrol}.
+    certIssuePermissions granting all PSIDs (subjectPermissions = all).
+    min_chain_length: number of certificates below the issuer down to the end entity
+    (Root CA -> EA/AA -> EC/AT = 2, EA/AA -> EC/AT = 1).
+    ee_type: end-entity types the issued chain may end in (EE_TYPE_* bits).
     """
-    return [PsidGroupPermissions(min_chain_depth=0, chain_depth_range=0, ee_type=0x60)]
+    return [PsidGroupPermissions(min_chain_depth=min_chain_length, chain_depth_range=0, ee_type=ee_type)]
+
+
+# ── Vanetza v2 ITS-AID lists for CA certificates ─────────────────────────────
+# Vanetza v2 requires every certificate's ITS-AID list to be a subset of its
+# signer's list (check_permission_consistency), so CA certificates must list the
+# AIDs of everything they issue. v3 expresses the same with certIssuePermissions.
+
+V2_AA_AIDS = [ItsAid.CAM, ItsAid.DENM, ItsAid.GN_MGMT, ItsAid.CERT_REQUEST]
+V2_EA_AIDS = [ItsAid.CERT_REQUEST]
+V2_ROOT_AIDS = [ItsAid.CRL, ItsAid.CTL] + [a for a in V2_AA_AIDS + V2_EA_AIDS
+                                           if a not in (ItsAid.CRL, ItsAid.CTL)]
+
+
+def _v2_aid_list(aids) -> list:
+    seen = []
+    for aid in aids:
+        if int(aid) not in seen:
+            seen.append(int(aid))
+    return [PsidSsp(psid=aid) for aid in seen]
+
+
+def _check_v2_at_psids(psids: list) -> None:
+    allowed = {int(a) for a in V2_AA_AIDS}
+    extra = sorted({int(p.psid) for p in psids} - allowed)
+    if extra:
+        raise ValueError(
+            f"ITS-AIDs {extra} are not in the v2 AA certificate's ITS-AID list {sorted(allowed)}; "
+            "Vanetza v2 would reject the AT (permissions must be a subset of the signer's).")
 
 
 def _make_validity_period(start_unix: float,
@@ -69,7 +105,8 @@ def _build_and_sign(tbs: ToBeSignedCertificate,
                     algorithm: PublicKeyAlgorithm,
                     version: EtsiVersion = EtsiVersion.V1_2_1,
                     subject_type: int = V1SubjectType.ROOT_CA,
-                    psids=None) -> Certificate:
+                    psids=None,
+                    issuer_cert: Optional[Certificate] = None) -> Certificate:
     """
     Encode the ToBeSignedCertificate, sign it, build the full Certificate,
     and cache both tbs_encoded and the full encoded certificate.
@@ -80,6 +117,8 @@ def _build_and_sign(tbs: ToBeSignedCertificate,
 
     ``subject_type`` is only used for V1_2_1 (vanetza SubjectType enum value).
     ``psids``        is only used for V1_2_1 (overrides tbs.app_permissions).
+    ``issuer_cert``  is the signing CA certificate (None for self-signed); for
+                     V2_2_1 its encoding is part of the IEEE 1609.2 signing input.
     """
     if version == EtsiVersion.V1_2_1:
         # Vanetza-compatible binary format
@@ -92,12 +131,19 @@ def _build_and_sign(tbs: ToBeSignedCertificate,
             psids=psids,
         )
     else:
-        # COER format (V2.2.1)
-        # Encode TBS with the 2-byte optional-field bitmap
+        # COER format (IEEE 1609.2-2016 / TS 103 097 v1.3.1, vanetza v3)
         tbs_encoded = encode_tbs_certificate(tbs, version=version)
 
-        # ECDSA sign the TBS encoding
-        r, s = ecdsa_sign(signing_priv_key, tbs_encoded, algorithm)
+        # IEEE 1609.2 clause 5.3.1.2.2: sign Hash(Hash(tbs) || Hash(issuer cert)),
+        # with the empty string as issuer input for self-signed certificates
+        if issuer.choice == IssuerChoice.SELF:
+            signer_encoded = b''
+        elif issuer_cert is not None:
+            signer_encoded = issuer_cert.encoded
+        else:
+            raise ValueError("issuer_cert is required for certificates that are not self-signed")
+        signing_input = ieee1609_signing_input(tbs_encoded, signer_encoded, algorithm)
+        r, s = ecdsa_sign(signing_priv_key, signing_input, algorithm)
         signature = EcdsaSignature(r=r, s=s, algorithm=algorithm)
 
         # Assemble Certificate
@@ -156,7 +202,7 @@ def issue_root_ca_certificate(
             PsidSsp(psid=int(ItsAid.CRL)),
             PsidSsp(psid=int(ItsAid.CTL)),
         ],
-        cert_issue_permissions=_all_permissions(),
+        cert_issue_permissions=_all_permissions(2, EE_TYPE_APP | EE_TYPE_ENROL),
         encryption_key=None,
         verify_key_indicator=vk,
     )
@@ -166,7 +212,8 @@ def issue_root_ca_certificate(
     issuer = IssuerIdentifier(choice=IssuerChoice.SELF, hash_alg=hash_alg)
 
     return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, sign_priv_key, algorithm,
-                           version=version, subject_type=V1SubjectType.ROOT_CA)
+                           version=version, subject_type=V1SubjectType.ROOT_CA,
+                           psids=_v2_aid_list(V2_ROOT_AIDS))
 
 
 # ── Profile 9.2 / 7.2 — Enrolment Authority (EA) Certificate ─────────────────
@@ -210,7 +257,7 @@ def issue_ea_certificate(
         validity_period=vp,
         region=region,
         app_permissions=[PsidSsp(psid=int(ItsAid.CERT_REQUEST))],
-        cert_issue_permissions=_all_permissions(),
+        cert_issue_permissions=_all_permissions(1, EE_TYPE_ENROL),
         encryption_key=ek,
         verify_key_indicator=vk,
     )
@@ -222,7 +269,8 @@ def issue_ea_certificate(
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=root_hash)
 
     return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, root_ca_priv_key, sign_algorithm,
-                           version=version, subject_type=V1SubjectType.ENROLLMENT_AUTHORITY)
+                           version=version, subject_type=V1SubjectType.ENROLLMENT_AUTHORITY,
+                           psids=_v2_aid_list(V2_EA_AIDS), issuer_cert=root_ca_cert)
 
 
 # ── Profile 9.3 / 7.3 — Authorization Authority (AA) Certificate ─────────────
@@ -266,7 +314,7 @@ def issue_aa_certificate(
         validity_period=vp,
         region=region,
         app_permissions=[PsidSsp(psid=int(ItsAid.CERT_REQUEST))],
-        cert_issue_permissions=_all_permissions(),
+        cert_issue_permissions=_all_permissions(1, EE_TYPE_APP),
         encryption_key=ek,
         verify_key_indicator=vk,
     )
@@ -278,7 +326,8 @@ def issue_aa_certificate(
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=root_hash)
 
     return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, root_ca_priv_key, sign_algorithm,
-                           version=version, subject_type=V1SubjectType.AUTHORIZATION_AUTHORITY)
+                           version=version, subject_type=V1SubjectType.AUTHORIZATION_AUTHORITY,
+                           psids=_v2_aid_list(V2_AA_AIDS), issuer_cert=root_ca_cert)
 
 
 # ── Profile 9.4 / 7.4 — Trust List Manager (TLM) Certificate ─────────────────
@@ -377,7 +426,8 @@ def issue_enrolment_credential(
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=ea_hash)
 
     return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, ea_priv_key, sign_algorithm,
-                           version=version, subject_type=V1SubjectType.ENROLLMENT_CREDENTIAL)
+                           version=version, subject_type=V1SubjectType.ENROLLMENT_CREDENTIAL,
+                           issuer_cert=ea_cert)
 
 
 # ── Profile 9.6 / 7.6 — Authorization Ticket (AT) ───────────────────────────
@@ -416,6 +466,8 @@ def issue_authorization_ticket(
         PsidSsp(psid=int(ItsAid.CAM)),
         PsidSsp(psid=int(ItsAid.DENM)),
     ]
+    if version == EtsiVersion.V1_2_1:
+        _check_v2_at_psids(psids)
 
     tbs = ToBeSignedCertificate(
         id=CertificateId(CertIdChoice.NONE),      # id = none (pseudonymous)
@@ -436,13 +488,13 @@ def issue_authorization_ticket(
         issuer = IssuerIdentifier(choice=IssuerChoice.SHA384_AND_DIGEST, digest=aa_hash)
 
     return _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key, sign_algorithm,
-                           version=version, subject_type=V1SubjectType.AUTHORIZATION_TICKET)
+                           version=version, subject_type=V1SubjectType.AUTHORIZATION_TICKET,
+                           issuer_cert=aa_cert)
 
 # ── Profile 9.6 / 7.6 (BKE variant) — Butterfly AT batch issuance ───────────
 
 def issue_butterfly_authorization_tickets(
-    caterpillar_sign_pub,
-    expansion_values: list,
+    cocoon_sign_pubs: list,
     aa_cert: Certificate,
     aa_priv_key,
     app_psids:       Optional[list] = None,
@@ -453,19 +505,29 @@ def issue_butterfly_authorization_tickets(
     version:         EtsiVersion = EtsiVersion.V1_2_1,
 ) -> list:
     """
-    Issue a batch of AT certificates via Butterfly Key Expansion.
-    For each eᵢ the AA derives Sᵢ = Cf + H(Cf||eᵢ)·G and issues an AT
-    certificate bound to Sᵢ.  All certs are conformant profile 9.6
-    (id=none, no certIssuePermissions, appPermissions present).
-    Per IEEE 1609.2a §6.4.3.7 and ETSI TS 102 941 §6.2.3.3.1.
+    ACA/AA side of the IEEE 1609.2.1 Butterfly Key Mechanism (explicit certificates),
+    as used by ETSI TS 102 941 clause 6.2.3.5.
+
+    For every cocoon verification key pk_cc (expanded by the EA/RA from the end
+    entity's caterpillar key), the AA draws a fresh random offset r, certifies the
+    butterfly key pk_bf = pk_cc + r*G and returns r to the end entity (in the real
+    protocol inside the response encrypted to the cocoon encryption key). The offset
+    is what makes the certificates unlinkable for the EA, which knows the cocoon keys.
+
+    All certificates are conformant AT profiles (id=none, no certIssuePermissions,
+    appPermissions present).
+
+    Returns a list of (Certificate, offset r) in the order of cocoon_sign_pubs.
     """
-    from .crypto import bke_expand_public_key
+    from .crypto import bke_random_offset, bke_butterfly_public_key
 
     t = start_time or time.time()
     psids = app_psids or [
         PsidSsp(psid=int(ItsAid.CAM)),
         PsidSsp(psid=int(ItsAid.DENM)),
     ]
+    if version == EtsiVersion.V1_2_1:
+        _check_v2_at_psids(psids)
     aa_hash = _hash_cert(aa_cert, sign_algorithm, version)
     issuer = (
         IssuerIdentifier(choice=IssuerChoice.SHA256_AND_DIGEST, digest=aa_hash)
@@ -474,10 +536,11 @@ def issue_butterfly_authorization_tickets(
     )
 
     tickets = []
-    for e_i in expansion_values:
-        at_sign_pub = bke_expand_public_key(caterpillar_sign_pub, e_i)
+    for cocoon_pub in cocoon_sign_pubs:
+        offset = bke_random_offset(cocoon_pub.curve)
+        butterfly_pub = bke_butterfly_public_key(cocoon_pub, offset)
         vp = _make_validity_period(t, duration_hours=validity_hours)
-        vk = PublicVerificationKey(algorithm=sign_algorithm, point=public_key_to_point(at_sign_pub))
+        vk = PublicVerificationKey(algorithm=sign_algorithm, point=public_key_to_point(butterfly_pub))
         region = GeographicRegion(choice=RegionChoice.ID, ids=region_ids) if region_ids else None
         tbs = ToBeSignedCertificate(
             id=CertificateId(CertIdChoice.NONE),
@@ -490,7 +553,9 @@ def issue_butterfly_authorization_tickets(
             encryption_key=None,
             verify_key_indicator=vk,
         )
-        tickets.append(_build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key,
-                                        sign_algorithm, version=version,
-                                        subject_type=V1SubjectType.AUTHORIZATION_TICKET))
+        cert = _build_and_sign(tbs, CertificateType.EXPLICIT, issuer, aa_priv_key,
+                               sign_algorithm, version=version,
+                               subject_type=V1SubjectType.AUTHORIZATION_TICKET,
+                               issuer_cert=aa_cert)
+        tickets.append((cert, offset))
     return tickets

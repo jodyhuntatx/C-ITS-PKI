@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
 C-ITS PKI Command-Line Interface
-Supports ETSI TS 103 097 V1.2.1 and V2.2.1 / IEEE Std 1609.2-2025.
+
+Two certificate/message formats, selected at init time (see docs/operations.md):
+  v2 = ETSI TS 103 097 V1.2.1 binary format (vanetza security/v2)
+  v3 = ETSI TS 103 097 V1.3.1 / IEEE Std 1609.2-2016 COER format (vanetza security/v3)
 
 Usage:
-    python cli.py init        [--output DIR] [--algo p256|p384] [--region REGION_IDS]
+    python cli.py init        [--output DIR] [--algo p256] [--region REGION_IDS]
                               [--etsi-version v2|v3]
-    python cli.py enrol       --output DIR --name ITS_NAME [--ec-validity 1]
-    python cli.py issue-at    --output DIR [--psid 36,37] [--at-validity 168] [--at-output DIR]
-    python cli.py butterfly-at --output DIR [--count 8] [--psid 36,37] [--at-validity 168]
+    python cli.py enrol       --output DIR --name ITS_NAME [--validity YEARS]
+    python cli.py issue-at    --output DIR [--psid 36,37] [--validity HOURS] [--at-output DIR]
+    python cli.py butterfly-at --output DIR [--count 8] [--psid 36,37] [--validity 168]
+                              [--mode original|unified] [--i-value N]
     python cli.py sign-cam    --at-key FILE --at-cert FILE --payload FILE [--output FILE]
     python cli.py sign-denm   --at-key FILE --at-cert FILE --payload FILE --lat LAT --lon LON
     python cli.py verify-sig  --signed FILE --at-cert FILE [--root FILE] [--aa FILE]
@@ -36,13 +40,14 @@ def main():
     # init
     p_init = sub.add_parser('init', help='Initialise PKI hierarchy')
     p_init.add_argument('--output', '-o', default='pki-output', help='Output directory')
-    p_init.add_argument('--algo', choices=['p256', 'p384'], default='p256')
+    p_init.add_argument('--algo', choices=['p256', 'p384'], default='p256',
+                        help='Signing curve; only p256 is accepted for v2 and v3 certificates')
     p_init.add_argument('--region', default=None, help='Comma-separated region IDs (e.g. 65535=EU-27); omit for no region restriction')
     p_init.add_argument('--etsi-version', choices=['v2', 'v3'], default='v2',
                         dest='etsi_version',
                         help='ETSI TS 103 097 standard version: '
                              'v2 = V1.2.1 vanetza-compatible binary format [default], '
-                             'v3 = V2.2.1 COER format (IEEE 1609.2-2022/2025)')
+                             'v3 = V1.3.1 COER format (IEEE 1609.2-2016 schema used by vanetza)')
     p_init.add_argument('--root-name', default='C-ITS-Root-CA')
     p_init.add_argument('--tlm-name', default='C-ITS-TLM')
     p_init.add_argument('--ea-name', default='C-ITS-EA')
@@ -69,6 +74,10 @@ def main():
     p_bke.add_argument('--psid', help='Comma-separated PSIDs (default: 36,37)')
     p_bke.add_argument('--validity', type=int, default=168, help='Validity in hours (default: 168=1 week)')
     p_bke.add_argument('--at-output', help='Output directory for AT')
+    p_bke.add_argument('--mode', choices=['original', 'unified'], default='original',
+                       help='IEEE 1609.2.1 butterfly option (default: original)')
+    p_bke.add_argument('--i-value', type=int, default=None, dest='i_value',
+                       help='i-period for the expansion (default: weeks since 2004-01-01)')
 
     # sign-cam
     p_cam = sub.add_parser('sign-cam', help='Sign a CAM payload')
@@ -91,7 +100,7 @@ def main():
     # verify-sig
     p_vcam = sub.add_parser('verify-sig', help='Verify a signed C-ITS message file')
     p_vcam.add_argument('--signed', required=True,
-                        help='Signed C-ITS message file (EtsiTs103097Data-Signed, COER)')
+                        help='Signed C-ITS message file (v3 EtsiTs103097Data-Signed or v2 SecuredMessage)')
     p_vcam.add_argument('--at-cert', required=True,
                         help='AT certificate used to sign the C-ITS message file')
     p_vcam.add_argument('--root', default=None,
@@ -106,7 +115,7 @@ def main():
     # encrypt
     p_enc = sub.add_parser('encrypt', help='Encrypt a payload for a recipient')
     p_enc.add_argument('--enc-cert', required=True, help='Recipient certificate')
-    p_enc.add_argument('--enc-key', required=True, help='Recipient encryption private key (PEM)')
+    p_enc.add_argument('--enc-key', required=True, help='Recipient encryption private key (PKCS#8 DER, unused for encryption)')
     p_enc.add_argument('--payload', required=True)
     p_enc.add_argument('--output', '-o')
     p_enc.add_argument('--etsi-version', choices=['v2', 'v3'], default=None,
@@ -117,7 +126,7 @@ def main():
     # decrypt
     p_dec = sub.add_parser('decrypt', help='Decrypt an encrypted message')
     p_dec.add_argument('--enc-cert', required=True, help='Your certificate')
-    p_dec.add_argument('--enc-key', required=True, help='Your encryption private key (PEM)')
+    p_dec.add_argument('--enc-key', required=True, help='Your encryption private key (PKCS#8 DER)')
     p_dec.add_argument('--input', '-i', required=True, help='Encrypted message file')
     p_dec.add_argument('--output', '-o')
 
@@ -214,6 +223,10 @@ def cmd_init(args):
     algo = PublicKeyAlgorithm.ECDSA_NIST_P256 if args.algo == 'p256' else PublicKeyAlgorithm.ECDSA_NIST_P384
     region_ids = [int(r) for r in args.region.split(',')] if args.region else None
     ver = EtsiVersion.V1_2_1 if args.etsi_version == 'v2' else EtsiVersion.V2_2_1
+    if algo != PublicKeyAlgorithm.ECDSA_NIST_P256:
+        # vanetza v2 is P-256 only; the IEEE 1609.2-2016 schema of vanetza v3 has no NIST P-384
+        print("[ERROR] Only --algo p256 is supported for vanetza v2 and v3 certificates.")
+        sys.exit(1)
 
     pki = CITSPKI(algorithm=algo, region_ids=region_ids, version=ver)
     certs = pki.initialise(
@@ -224,7 +237,7 @@ def cmd_init(args):
     )
     pki.save(args.output)
 
-    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V2.2.1'
+    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V1.3.1 (IEEE 1609.2-2016, COER)'
     print(f"\n[OK] PKI initialised in '{args.output}' (ETSI TS 103 097 {ver_label})")
     print(f"     Root CA  : {len(certs['root_ca'])} bytes")
     print(f"     TLM      : {len(certs['tlm'])} bytes")
@@ -360,11 +373,23 @@ def cmd_issue_at(args):
     print(f"     Private key    : {at_key_path}")
 
 def cmd_butterfly_at(args):
-    from src.types import PublicKeyAlgorithm, PsidSsp, EtsiVersion
-    from src.crypto import generate_keypair, serialize_private_key, deserialize_private_key, random_bytes, bke_expand_private_key
-    from src.certificates import issue_butterfly_authorization_tickets
-    from src.encoding import decode_certificate
-    from datetime import datetime, timezone
+    """
+    Issue a batch of ATs with the IEEE 1609.2.1 Butterfly Key Mechanism
+    (ETSI TS 102 941 clause 6.2.3.5), playing the EE, EA and AA roles locally.
+
+    Writes to the output directory (default <pki>/bke-tickets):
+      butterfly.json                     mode, i-value, count
+      caterpillar_sign.key               EE caterpillar signing key (PKCS8 DER)
+      sign_expansion.key                 EE signing expansion key (16 bytes)
+      caterpillar_enc.key                EE caterpillar encryption key (original mode)
+      enc_expansion.key                  EE encryption expansion key (original mode)
+      bke_at_<j>.cert                    butterfly AT j (certifies pk_cc + r*G)
+      bke_at_<j>.offset                  AA random offset r for AT j (32 bytes, big-endian)
+      bke_at_<j>_sign.key                reconstructed AT private key sk_cc + r (PKCS8 DER)
+    """
+    from src.types import PublicKeyAlgorithm, PsidSsp, EtsiVersion, now_its_time32
+    from src.crypto import generate_keypair, serialize_private_key, deserialize_private_key, random_bytes
+    from src.pki import CITSPKI, PKIEntity
     import json
 
     out_dir = Path(args.output)
@@ -374,7 +399,7 @@ def cmd_butterfly_at(args):
     aa_cert_bytes = (out_dir / 'aa.cert').read_bytes()
     aa_priv_der   = (out_dir / 'aa_sign.key').read_bytes()
 
-    # We only need aa_cert.encoded for hashing (issuer digest); skip full decode.
+    # Only aa_cert.encoded is needed (issuer digest and v3 signing input); skip full decode.
     from src.types import (
         Certificate as _Cert, CertificateType as _CT, IssuerIdentifier as _II,
         ToBeSignedCertificate as _TBS, CertificateId as _CID,
@@ -385,38 +410,58 @@ def cmd_butterfly_at(args):
     _dummy_tbs = _TBS(id=_CID(_CIC.NONE), craca_id=b'\x00\x00\x00', crl_series=0, validity_period=_dummy_vp)
     aa_cert = _Cert(version=2, cert_type=_CT.EXPLICIT, issuer=_II(_IC.SELF), tbs=_dummy_tbs)
     aa_cert.encoded = aa_cert_bytes
-
     aa_priv_key = deserialize_private_key(aa_priv_der)
+
+    pki = CITSPKI(algorithm=algo, region_ids=meta.get('region_ids'), version=ver)
+    pki.aa = PKIEntity(name='AA', sign_priv_key=aa_priv_key, sign_pub_key=aa_priv_key.public_key(),
+                       certificate=aa_cert, algorithm=algo)
+
     psids = [PsidSsp(psid=int(p)) for p in args.psid.split(',')] if args.psid else None
+    # i-period: weeks since the ITS epoch (2004-01-01) unless given explicitly
+    i_value = args.i_value if args.i_value is not None else now_its_time32() // (7 * 86400)
 
-    cat_priv, cat_pub = generate_keypair(algo)
-    expansion_values = [random_bytes(16) for _ in range(args.count)]
+    # EE: caterpillar keys and expansion keys (sent to the EA in the butterfly request)
+    cat_priv, _ = generate_keypair(algo)
+    sign_expansion_key = random_bytes(16)
+    cat_enc_priv = enc_expansion_key = None
+    if args.mode == 'original':
+        cat_enc_priv, _ = generate_keypair(algo)
+        enc_expansion_key = random_bytes(16)
 
-    print(f"[BKE] Issuing {args.count} butterfly ATs...")
-    at_certs = issue_butterfly_authorization_tickets(
-        caterpillar_sign_pub=cat_pub,
-        expansion_values=expansion_values,
-        aa_cert=aa_cert,
-        aa_priv_key=aa_priv_key,
+    print(f"[BKE] Issuing {args.count} butterfly ATs ({args.mode} mode, i={i_value})...")
+    tickets = pki.issue_butterfly_authorization_tickets(
+        caterpillar_sign_priv=cat_priv,
+        sign_expansion_key=sign_expansion_key,
+        i_value=i_value,
+        count=args.count,
+        mode=args.mode,
+        caterpillar_enc_priv=cat_enc_priv,
+        enc_expansion_key=enc_expansion_key,
         app_psids=psids,
-        sign_algorithm=algo,
         validity_hours=args.validity,
-        version=ver,
     )
 
-    # ts = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    # at_dir = Path(args.at_output or out_dir / 'bke-tickets' / ts)
     at_dir = Path(args.at_output or out_dir / 'bke-tickets')
     at_dir.mkdir(parents=True, exist_ok=True)
+    for stale in list(at_dir.glob('bke_at_*')) + list(at_dir.glob('caterpillar_*.key')) + \
+            list(at_dir.glob('*_expansion.key')):
+        stale.unlink()   # never mix keys and tickets of different batches
+    (at_dir / 'butterfly.json').write_text(json.dumps(
+        {'mode': args.mode, 'i_value': i_value, 'count': args.count, 'standard': 'IEEE 1609.2.1'}, indent=2))
     (at_dir / 'caterpillar_sign.key').write_bytes(serialize_private_key(cat_priv))
+    (at_dir / 'sign_expansion.key').write_bytes(sign_expansion_key)
+    if args.mode == 'original':
+        (at_dir / 'caterpillar_enc.key').write_bytes(serialize_private_key(cat_enc_priv))
+        (at_dir / 'enc_expansion.key').write_bytes(enc_expansion_key)
 
-    for i, (cert, e_i) in enumerate(zip(at_certs, expansion_values)):
-        at_priv = bke_expand_private_key(cat_priv, e_i)
-        (at_dir / f'bke_at_{i}.cert').write_bytes(cert.encoded)
-        (at_dir / f'bke_at_{i}_sign.key').write_bytes(serialize_private_key(at_priv))
-        (at_dir / f'bke_at_{i}.expansion').write_bytes(e_i)
+    for t in tickets:
+        j = t['j']
+        (at_dir / f'bke_at_{j}.cert').write_bytes(t['at'])
+        (at_dir / f'bke_at_{j}.offset').write_bytes(t['offset'].to_bytes(32, 'big'))
+        (at_dir / f'bke_at_{j}_sign.key').write_bytes(t['priv_key_der'])
 
     print(f"[OK] {args.count} butterfly ATs issued → {at_dir}")
+    print(f"     each AT key reconstructed as sk_cc + r and checked against its certificate")
 
 def cmd_sign_cam(args):
     """Sign a CAM payload."""
@@ -536,16 +581,22 @@ def cmd_verify_sig(args):
     print(f"\n[Signed CAM]")
     print(f"  File         : {args.signed} ({len(signed_bytes)} bytes)")
     print(f"  AT cert      : {args.at_cert} ({ver_str.upper()})")
+    if signed_bytes[:1] == b'\x03' and ver_str == 'v2' or signed_bytes[:1] == b'\x02' and ver_str == 'v3':
+        print(f"  [WARN] message protocol version {signed_bytes[0]} does not match the {ver_str} AT certificate")
 
     result = verify_signed_data(
         signed_data_bytes=signed_bytes,
         signer_pub_key=at_pub_key,
         algorithm=algo,
+        signer_cert_encoded=at_cert.encoded,
     )
 
     # ── Report message-signature result ──────────────────────────────────────
     print(f"\n[Message Signature]")
     sig_ok = result.get('valid', False)
+    fmt_label = {'v2': 'SecuredMessage (TS 103 097 v1.2.1)',
+                 'v3': 'EtsiTs103097Data (TS 103 097 v1.3.1, COER)'}.get(result.get('format'), 'unknown')
+    print(f"  Format       : {fmt_label}")
     print(f"  [{'PASS' if sig_ok else 'FAIL'}] ECDSA signature over ToBeSignedData")
 
     if not sig_ok:
@@ -757,14 +808,13 @@ def cmd_verify_cert(args):
         verify_region_constraint, verify_at_profile
     )
 
-    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V2.2.1'
+    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V1.3.1 (IEEE 1609.2-2016, COER)'
     print(f"\n[Certificate Info]")
     if ver == EtsiVersion.V1_2_1:
         print(f"  Format       : ETSI TS 103 097 {ver_label} (vanetza binary)")
         print(f"  Cert version : {cert.version}  (vanetza format)")
     else:
-        bitmap_note = '2-byte TBS bitmap'
-        print(f"  ETSI Standard: ETSI TS 103 097 {ver_label}  ({bitmap_note})")
+        print(f"  ETSI Standard: ETSI TS 103 097 {ver_label}  (vanetza v3)")
         print(f"  IEEE 1609.2 Cert Version : {cert.version}  (always 3)")
         print(f"  Type         : {cert.cert_type.name}")
     print(f"  Id choice    : {cert.tbs.id.choice.name}")
@@ -778,6 +828,15 @@ def cmd_verify_cert(args):
 
     sig_ok = verify_certificate_signature(cert, issuer_cert)
     results.append(("Signature", sig_ok))
+
+    if issuer_cert is not None and cert.issuer.digest:
+        from src.verification import verify_issuer_digest
+        if ver == EtsiVersion.V1_2_1:
+            from src.v1_encoding import hash_certificate_v1
+            digest_ok = cert.issuer.digest == hash_certificate_v1(issuer_cert.encoded)
+        else:
+            digest_ok = verify_issuer_digest(cert, issuer_cert, PublicKeyAlgorithm.ECDSA_NIST_P256)
+        results.append(("Issuer digest matches --issuer", digest_ok))
 
     vp_ok = verify_certificate_validity_period(cert)
     results.append(("Validity period", vp_ok))
@@ -830,7 +889,7 @@ def cmd_info(args):
     start_unix = its_time32_to_unix(cert.tbs.validity_period.start)
     start_dt = datetime.datetime.utcfromtimestamp(start_unix).isoformat()
 
-    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V2.2.1'
+    ver_label = 'V1.2.1' if ver == EtsiVersion.V1_2_1 else 'V1.3.1 (IEEE 1609.2-2016, COER)'
 
     print(f"\n{'='*60}")
     print(f"EtsiTs103097Certificate")
@@ -852,9 +911,8 @@ def cmd_info(args):
         print(f"  Cert version    : {cert.version}  (vanetza v2 format)")
         print(f"  Subject type    : {st_name} ({st})")
     else:
-        bitmap_note = '2-byte (IEEE 1609.2-2022/2025)'
         print(f"  IEEE 1609.2 Cert Version : {cert.version}  (always 3 per IEEE 1609.2)")
-        print(f"  ETSI Standard   : ETSI TS 103 097 {ver_label}  (TBS bitmap: {bitmap_note})")
+        print(f"  ETSI Standard   : ETSI TS 103 097 {ver_label}  (vanetza v3)")
         print(f"  Type            : {cert.cert_type.name}")
 
     print(f"  Issuer choice   : {cert.issuer.choice.name}")

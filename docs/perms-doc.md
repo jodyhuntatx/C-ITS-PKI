@@ -1,79 +1,87 @@
-# Certificate Permission Structure — vanetza-nap/vanetza/security
+# Vanetza v2 Certificate Permission Structure (informative)
 
-Certificates implement the **ETSI TS 103 097 v1.2.1** standard for V2X (Vehicle-to-Everything) security. Permissions flow through a 3-layer hierarchy.
+How Vanetza's `security/v2` module [R24] represents and checks certificate permissions
+for ETSI TS 103 097 V1.2.1 [R4]. This is background for
+[DD-06](design-decisions.md#dd-06), [DD-07](design-decisions.md#dd-07) and
+[KD-1/KD-2](compliance.md#62-resolved) (now resolved). Source references are to
+`vanetza-nap/vanetza/security/` (release2) and name functions rather than line numbers.
 
-## 1. The Three-Tier Certificate Chain
+## 1. Certificate chain
 
 ```
-Root CA (self-signed, in TrustStore)
-  └── Authorization Authority (AA)
-        └── Authorization Ticket (AT)  ← what a vehicle actually uses
+Root CA (signer_info = self, held in the TrustStore)
+  └── Authorization Authority (signer_info = certificate_digest_with_sha256)
+        └── Authorization Ticket (signer_info = certificate_digest_with_sha256)
 ```
 
-- **Root CAs** sign Authorization Authorities and live in the `TrustStore`.
-- **Authorization Authorities** sign Authorization Tickets.
-- **Authorization Tickets (ATs)** are the end-entity certs carried in signed V2X messages.
+- **TS 103 097 V1.2.1:** requires `self` for root CAs and
+  `certificate_digest_with_sha256` for other CAs [R4 cl. 7.4.4] and for ATs and ECs
+  [R4 cl. 7.4.2, 7.4.3].
+- **Vanetza** (`v2/default_certificate_validator.cpp`, `check_certificate`):
+  - ATs are verified only against AAs found in the certificate cache;
+  - AAs are verified only against root certificates in the trust store.
+- **Caveat:** AAs supplied to socktap with `--certificate-chain` go straight into the
+  cache. Vanetza therefore does not check them against the trust store, and a
+  wrong-root configuration is not detected at runtime for v2. The vnap-secure startup
+  diagnostic `[V2-CHAIN]` reports it.
 
-Validation is enforced in `default_certificate_validator.cpp:220-254` — ATs can only be verified by AAs, and AAs only by root CAs.
+## 2. Subject attributes
 
----
+The attribute types [R4 cl. 6.4, 6.5], mirrored in `v2/subject_attribute.hpp`:
 
-## 2. Subject Attributes — Where Permissions Live
-
-Defined in `subject_attribute.hpp:44-52`, a certificate's `subject_attributes` list holds one or more of:
-
-| Type | Enum value | Content |
+| Type | Value | Content |
 |---|---|---|
-| `Verification_Key` | 0 | ECDSA public key for signature verification |
-| `Encryption_Key` | 1 | Public key for encryption |
-| `Assurance_Level` | 2 | `SubjectAssurance` — trust level |
-| `Reconstruction_Value` | 3 | ECC point (for implicit certs) |
-| **`ITS_AID_List`** | **32** | List of allowed ITS Application IDs (no SSP) |
-| **`ITS_AID_SSP_List`** | **33** | List of ITS AIDs + Service Specific Permissions |
+| `verification_key` | 0 | ECDSA public key |
+| `encryption_key` | 1 | ECIES public key (EA/AA) |
+| `assurance_level` | 2 | `SubjectAssurance`: bits 7–5 level, bits 1–0 confidence [R4 cl. 6.6] |
+| `reconstruction_value` | 3 | ECC point (implicit certificates) |
+| `its_aid_list` | 32 | ITS-AIDs without SSP: CA certificates [R4 cl. 7.4.4] |
+| `its_aid_ssp_list` | 33 | ITS-AIDs with service-specific permissions: ATs and ECs [R4 cl. 7.4.2, 7.4.3] |
 
-The key permission-carrying attributes are `ITS_AID_List` (used by AAs) and `ITS_AID_SSP_List` (used by ATs).
+`its_aid_list` entries are interpreted as all possible SSPs of that AID [R4 cl. 7.4.1].
 
----
+## 3. SSPs
 
-## 3. ITS-AID and Service Specific Permissions (SSP)
+Each `ItsAidSsp` pairs an ITS-AID with an opaque SSP byte string [R4 cl. 6.9]. SSP
+contents are defined by the application standards. For CAMs [R17], Vanetza's
+`security/cam_ssp.hpp` decodes the first byte as role flags:
 
-Each `ItsAidSsp` (`subject_attribute.hpp:38-42`) pairs:
-- **`its_aid`** — a numeric application ID (e.g., 36 for CAM, 37 for DENM)
-- **`service_specific_permissions`** — a raw `ByteBuffer` of permission bits
+- CEN DSRC tolling zone 0x80
+- public transport 0x40
+- special transport 0x20
+- dangerous goods 0x10
+- roadwork 0x08
+- rescue 0x04
+- emergency 0x02
+- safety car 0x01
 
-For CAM specifically (`cam_ssp.hpp`), the SSP is a 2-byte bitmask of role flags:
+The next byte carries further flags (closed lanes, right of way, …).
 
-```
-First byte:   CEN_DSRC_Tolling_Zone (0x80), Public_Transport (0x40),
-              Special_Transport (0x20), Dangerous_Goods (0x10),
-              Roadwork (0x08), Rescue (0x04), Emergency (0x02), Safety_Car (0x01)
+The C-ITS-PKI tool writes SSP version 1 with no special permissions by default
+([DD-07](design-decisions.md#dd-07)).
 
-Second byte:  Closed_Lanes (0x8000), Request_For_Right_Of_Way (0x4000),
-              Request_For_Free_Crossing_At_Traffic_Light (0x2000),
-              No_Passing (0x1000), No_Passing_For_Trucks (0x0800), Speed_Limit (0x0400)
-```
+**Message permissions** (`straight_verify_service.cpp`, `assign_permissions`): Vanetza
+takes the permissions for a received message **only from `its_aid_ssp_list`**. If the
+signer's AT has no `its_aid_ssp_list` entry for the message's AID, the message is
+rejected as `Invalid_Certificate` (`Insufficient_ITS_AID`).
 
-Permissions are added to a certificate via `certificate.cpp:226-251` (`Certificate::add_permission`), which appends to either the `ITS_AID_List` or `ITS_AID_SSP_List` attribute.
+## 4. Consistency with the signer
 
----
+`check_consistency` (`v2/default_certificate_validator.cpp`) applies the checks of
+[R4 cl. 7.4.1] between a certificate and its signer:
 
-## 4. Permission Inheritance (the Key Constraint)
+| Check | Function | Rule |
+|---|---|---|
+| Time | `check_time_consistency` | validity within the signer's |
+| Permissions | `check_permission_consistency` | the certificate's AIDs ⊆ the signer's AIDs |
+| Assurance | `check_subject_assurance_consistency` | level ≤ the signer's level |
+| Region | `check_region_consistency` | region covered by the signer's |
 
-When validating, `check_permission_consistency()` (`default_certificate_validator.cpp:97-107`) enforces that **a certificate's AIDs must be a subset of its signer's AIDs**:
-
-```cpp
-return std::includes(signer_aids.begin(), signer_aids.end(),
-                     certificate_aids.begin(), certificate_aids.end());
-```
-
-So an AA can only grant an AT permission for services the AA itself was authorized for. This is the downward delegation constraint — permissions can only narrow, never expand, down the chain.
-
----
-
-## 5. Assurance Level (Trust Level)
-
-`SubjectAssurance` (`subject_attribute.hpp:17-35`) is a single byte split into:
-- **`assurance`** — 3 bits (bits 7–5): trust level 0–7
-- **`confidence`** — 2 bits (bits 1–0): confidence in that level
-
-The validator (`default_certificate_validator.cpp:109-129`) enforces that an AT's assurance level cannot exceed its signing AA's level. If either cert omits the field, the check passes (it's optional per TS 103 096-2).
+**Assurance level.**
+- TS 103 097 V1.2.1 requires `assurance_level` in every certificate, default 0
+  [R4 cl. 7.4.1].
+- Stock Vanetza rejects certificates without it (`Missing_Subject_Assurance`), and the
+  consistency check fails when either certificate lacks it.
+- The vnap-secure patch #4 makes the attribute optional. Since
+  [KD-1](compliance.md#62-resolved) was fixed, C-ITS-PKI v2 certificates carry
+  `assurance_level` 0 and no longer need the patch (verified with stock Vanetza, E10).

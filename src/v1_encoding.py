@@ -27,7 +27,7 @@ everything else from version through the validity restriction list is signed.
 """
 import hashlib
 from .types import (
-    Certificate, ToBeSignedCertificate, IssuerIdentifier, CertificateId,
+    Certificate, ToBeSignedCertificate, IssuerIdentifier, CertificateId, SubjectAssurance,
     ValidityPeriod, Duration, GeographicRegion,
     PsidSsp, PublicVerificationKey, PublicEncryptionKey, EcdsaSignature,
     CertificateType, IssuerChoice, CertIdChoice, DurationChoice, RegionChoice,
@@ -226,14 +226,32 @@ def _encode_its_aid_ssp_list_attr(psids: list) -> bytes:
             encode_length(len(items)) + items)
 
 
+# Default SSPs for v2 authorization tickets, same as vanetza's certify tool:
+# SSP version 1 with no special permissions (EN 302 637-2 / EN 302 637-3).
+V2_DEFAULT_AT_SSPS = {
+    36: b'\x01\x00\x00',          # CAM
+    37: b'\x01\x00\x00\x00',      # DENM
+}
+
+
 def encode_subject_attributes_v1(vk: PublicVerificationKey,
                                   ek=None,
-                                  psids=None) -> bytes:
+                                  psids=None,
+                                  force_ssp_list: bool = False,
+                                  assurance: int = 0x00) -> bytes:
     """
     Encode all subject attributes in vanetza-required order (ascending type):
       0: Verification_Key (always present)
       1: Encryption_Key (optional — present for EA/AA)
+      2: Assurance_Level (always present; TS 103 097 V1.2.1 clause 7.4.1 requires it
+         in every certificate, default level 0 = byte 0x00)
      32: ITS_AID_List or ITS_AID_SSP_List (present when PSIDs are given)
+
+    ``force_ssp_list`` selects ITS_AID_SSP_List even without SSP values. It is
+    required for authorization tickets and enrolment credentials (clauses 7.4.2,
+    7.4.3); vanetza also only takes message permissions from ITS_AID_SSP_List.
+
+    ``assurance`` is the SubjectAssurance byte: bits 7-5 level, bits 1-0 confidence.
 
     Returns the concatenated raw attribute bytes (NOT yet length-prefixed).
     The caller wraps this with encode_length(len(result)).
@@ -242,8 +260,9 @@ def encode_subject_attributes_v1(vk: PublicVerificationKey,
     attrs += _encode_verification_key_attr(vk)
     if ek is not None:
         attrs += _encode_encryption_key_attr(ek)
+    attrs += bytes([V1SubjectAttributeType.ASSURANCE_LEVEL, assurance & 0xE3])
     if psids:
-        if any(ps.ssp for ps in psids):
+        if force_ssp_list or any(ps.ssp for ps in psids):
             attrs += _encode_its_aid_ssp_list_attr(psids)
         else:
             attrs += _encode_its_aid_list_attr(psids)
@@ -453,6 +472,7 @@ def decode_certificate_v1(data: bytes, offset: int = 0):
     offset += name_len
 
     # ── Subject Attributes ────────────────────────────────────────────────────
+    assurance = None
     attrs_size, offset = decode_length(data, offset)
     attrs_end = offset + attrs_size
 
@@ -493,7 +513,8 @@ def decode_certificate_v1(data: bytes, offset: int = 0):
             )
 
         elif attr_type == V1SubjectAttributeType.ASSURANCE_LEVEL:
-            _assurance = data[offset]; offset += 1   # skip
+            b = data[offset]; offset += 1
+            assurance = SubjectAssurance(level=(b >> 5) & 0x7, confidence=b & 0x3)
 
         elif attr_type in (V1SubjectAttributeType.ITS_AID_LIST,
                            V1SubjectAttributeType.ITS_AID_SSP_LIST):
@@ -595,6 +616,7 @@ def decode_certificate_v1(data: bytes, offset: int = 0):
         crl_series=0,                   # not in vanetza format; use zero
         validity_period=validity_period,
         region=region,
+        assurance_level=assurance,
         app_permissions=app_permissions if app_permissions else None,
         cert_issue_permissions=None,    # not in vanetza v2 format
         encryption_key=enc_key,
@@ -667,10 +689,22 @@ def build_and_sign_v1(tbs: ToBeSignedCertificate,
     subject_info_bytes = encode_subject_info_v1(subject_type, name)
 
     effective_psids = psids if psids is not None else tbs.app_permissions
+    # ATs (clause 7.4.2) and ECs (clause 7.4.3) carry its_aid_ssp_list; CAs carry its_aid_list
+    uses_ssp_list = subject_type in (V1SubjectType.AUTHORIZATION_TICKET,
+                                     V1SubjectType.ENROLLMENT_CREDENTIAL)
+    if uses_ssp_list and effective_psids:
+        effective_psids = [
+            PsidSsp(psid=ps.psid,
+                    ssp=ps.ssp if ps.ssp is not None else V2_DEFAULT_AT_SSPS.get(int(ps.psid), b''))
+            for ps in effective_psids
+        ]
     attrs_bytes = encode_subject_attributes_v1(
         vk=tbs.verify_key_indicator,
         ek=tbs.encryption_key,
         psids=effective_psids,
+        force_ssp_list=uses_ssp_list,
+        assurance=(((tbs.assurance_level.level & 0x7) << 5) | (tbs.assurance_level.confidence & 0x3))
+                  if tbs.assurance_level is not None else 0x00,
     )
     vr_bytes = encode_validity_restrictions_v1(tbs.validity_period, tbs.region)
 

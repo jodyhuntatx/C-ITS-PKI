@@ -125,4 +125,47 @@ assert serialize_private_key(ec_priv) != serialize_private_key(at_priv)
 print('Independent AT/EC keys OK')
 "
 
+
+section "TS 103 097 V1.2.1 clause 7.4 (KD-1, KD-2)"
+
+assert_python_ok "KD-1: every v2 certificate carries assurance_level (default 0)" "
+from src.pki import CITSPKI
+from src.types import EtsiVersion
+from src.v1_encoding import decode_certificate_v1
+pki = CITSPKI(version=EtsiVersion.V1_2_1); pki.initialise()
+certs = {'root': pki.root_ca.certificate, 'tlm': pki.tlm.certificate, 'ea': pki.ea.certificate,
+         'aa': pki.aa.certificate, 'ec': pki.enrol_its_station('S1')['certificate'],
+         'at': pki.issue_authorization_ticket()['certificate']}
+for name, cert in certs.items():
+    d, _ = decode_certificate_v1(cert.encoded)
+    a = d.tbs.assurance_level
+    assert a is not None and (a.level, a.confidence) == (0, 0), name
+print('assurance_level 0 present in root, tlm, ea, aa, ec, at')
+"
+
+assert_python_ok "KD-2: EC and AT use its_aid_ssp_list, CA certificates its_aid_list" "
+from src.pki import CITSPKI
+from src.types import EtsiVersion
+pki = CITSPKI(version=EtsiVersion.V1_2_1); pki.initialise()
+def aid_attr_type(encoded):
+    # walk the subject attributes of a v2 certificate and return the ITS-AID attribute type
+    from src.v1_encoding import decode_length
+    off = 1
+    off += 1 if encoded[off] == 0 else 9                  # signer_info
+    off += 1; n, off = decode_length(encoded, off); off += n  # subject_info
+    size, off = decode_length(encoded, off); end = off + size
+    while off < end:
+        t = encoded[off]
+        if t in (0x20, 0x21):
+            return t
+        off += {0: 35, 1: 36, 2: 2}[t]
+    return None
+ec = pki.enrol_its_station('S1')['certificate']; at = pki.issue_authorization_ticket()['certificate']
+assert aid_attr_type(ec.encoded) == 0x21, 'EC must use its_aid_ssp_list (clause 7.4.3)'
+assert aid_attr_type(at.encoded) == 0x21, 'AT must use its_aid_ssp_list (clause 7.4.2)'
+for ca in (pki.ea.certificate, pki.aa.certificate):
+    assert aid_attr_type(ca.encoded) == 0x20, 'CA must use its_aid_list (clause 7.4.4)'
+print('EC/AT: its_aid_ssp_list, EA/AA: its_aid_list')
+"
+
 print_summary

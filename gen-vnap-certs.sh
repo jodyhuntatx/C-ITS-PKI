@@ -10,7 +10,7 @@ PYTHON="uv run python"
 NUM_TICKETS=8
 
 # Cert directory used by simulation
-TARGET_DIR="/Users/josephhunt/COIMBRA/vnap-secure/vnap-certs/c-its-pki"
+TARGET_DIR="/home/demo/COIMBRA/vnap-secure/vnap-certs/c-its-pki"
 
 # ── PKI project root ──────────────────────────────────────────────────────────
 PKI_ROOT="$(pwd)"
@@ -20,12 +20,11 @@ PKI_PY="$PYTHON -c"
 main() {
   case $# in
     0)
-      ETSI_VERSION="v2"
+      ETSI_VERSION="v3"
       gen_vnap_certs
       ;;
     1)
       ETSI_VERSION="v2"
-      OUTPUT_DIR=$1
       gen_vnap_certs
       ;;
     *)

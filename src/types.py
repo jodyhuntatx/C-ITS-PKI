@@ -35,6 +35,7 @@ def now_its_time64() -> int:
 class ItsAid(IntEnum):
     CAM = 36
     DENM = 37
+    GN_MGMT = 141    # GeoNetworking management (beacons)
     CTL = 617        # Certificate Trust List
     CRL = 622        # Certificate Revocation List
     CERT_REQUEST = 623  # Secure Certificate Request

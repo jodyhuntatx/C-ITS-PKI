@@ -105,14 +105,20 @@ print('AC-01 PASSED')
 
 section "Root CA P-384 variant"
 
-assert_python_ok "Root CA certificate with P-384" "
+# The IEEE 1609.2-2016 schema used by vanetza v3 has no NIST P-384 key type,
+# so a P-384 v3 certificate cannot be encoded and must be rejected.
+assert_python_ok "Root CA certificate with P-384 is rejected for v3" "
 from src.crypto import generate_keypair
 from src.types import PublicKeyAlgorithm, EtsiVersion
 from src.certificates import issue_root_ca_certificate
 priv, pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P384)
-cert = issue_root_ca_certificate('Test-Root-CA-384', priv, pub, algorithm=PublicKeyAlgorithm.ECDSA_NIST_P384, version=EtsiVersion.V2_2_1)
-assert len(cert.encoded) > 50
-print(f'P-384 Root CA: {len(cert.encoded)} bytes')
+try:
+    issue_root_ca_certificate('Test-Root-CA-384', priv, pub, algorithm=PublicKeyAlgorithm.ECDSA_NIST_P384, version=EtsiVersion.V2_2_1)
+except ValueError as e:
+    assert 'P-256' in str(e) or 'P256' in str(e), e
+    print('P-384 rejected:', e)
+else:
+    raise AssertionError('P-384 v3 certificate was accepted')
 "
 
 print_summary

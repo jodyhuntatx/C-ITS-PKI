@@ -213,4 +213,76 @@ assert b'-----' not in cert.encoded
 print('Vanetza binary format OK')
 "
 
+
+section "Butterfly Key Mechanism (IEEE 1609.2.1)"
+
+assert_python_ok "Expansion function matches the SCMS reference test vectors" "
+from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, derive_private_key
+from src import crypto
+# conz27/crypto-test-vectors bfkeyexp.txt (CAMP SCMS reference vectors)
+i, j = 0x217D79E1, 0x11
+vectors = [
+    (crypto.BKE_PURPOSE_CERT, 0x121D14216715E11D2D3787434A673B1B,
+     0xD418760F0CB2DCB856BC3C7217AD3AA36DB6742AE1DB655A3D28DF88CBBF84E1,
+     0x4D2093ED3EA27B15FCBD61806FFA13B36AE367F88C52397824A9BF67283D8CEE,
+     (0x2B18F3D93C4DF3D9D1490E3A9BA5A0DE9CFA73EDDB95408BC1F2BF60CB3CF313,
+      0x1A2CE511E0DA86356329A5C22A36A8A53088DCB11A5A94FA903EF0087421666A)),
+    (crypto.BKE_PURPOSE_ENC, 0xF9FCE2371B4523C0A75FC352BA7EBD8D,
+     0x4624A6F9F6BC6BD088A71ED97B3AEE983B5CC2F574F64E96A531D2464137049F,
+     0xE77A422D7415EF1BBB8A8310E7D4039AC9EF9C2EA28022C8010C1A611E72A7B6,
+     (0xB568FD55A7114254118E7463E85459BDD3C091342625B4A929541151BB8286BE,
+      0xED8DBE22200353D316CC5C3D8F1F281D8BFB34A9E6E1DBFE2043D928C64B430B)),
+]
+for purpose, k, seed, expanded, expanded_pub in vectors:
+    key = k.to_bytes(16, 'big')
+    priv = derive_private_key(seed, SECP256R1())
+    assert crypto.bke_cocoon_private_key(priv, key, i, j, purpose).private_numbers().private_value == expanded, purpose
+    pub = crypto.bke_cocoon_public_key(priv.public_key(), key, i, j, purpose).public_numbers()
+    assert (pub.x, pub.y) == expanded_pub, purpose
+print('certificate and encryption expansion match the reference vectors')
+"
+
+assert_python_ok "Original and unified BKM: reconstructed keys match certificates and sign" "
+from src.pki import CITSPKI
+from src.types import PublicKeyAlgorithm, EtsiVersion
+from src.crypto import generate_keypair, random_bytes, bke_cocoon_public_key, public_key_to_point
+from src.signing import sign_cam, verify_signed_data
+pki = CITSPKI(version=EtsiVersion.V1_2_1)
+pki.initialise()
+cat_s, _ = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
+cat_e, _ = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
+ck, ek = random_bytes(16), random_bytes(16)
+for mode in ('original', 'unified'):
+    tickets = pki.issue_butterfly_authorization_tickets(
+        cat_s, ck, i_value=1234, count=4, mode=mode,
+        caterpillar_enc_priv=cat_e if mode == 'original' else None,
+        enc_expansion_key=ek if mode == 'original' else None)
+    assert [t['j'] for t in tickets] == [0, 1, 2, 3]
+    assert len({t['offset'] for t in tickets}) == 4, 'offsets must be fresh per certificate'
+    for t in tickets:
+        cocoon = public_key_to_point(bke_cocoon_public_key(cat_s.public_key(), ck, 1234, t['j'])).compressed
+        certified = t['certificate'].tbs.verify_key_indicator.point.compressed
+        # the AA offset hides the cocoon key: the EA cannot link the certificate to the request
+        assert certified != cocoon
+        assert public_key_to_point(t['sign_pub_key']).compressed == certified
+        signed = sign_cam(b'bke', t['sign_priv_key'], t['at'], use_digest=False)
+        assert verify_signed_data(signed, None, signer_cert_encoded=t['at'])['valid'], mode
+print('original and unified: 4 ATs each, keys reconstructed, CAMs verify')
+"
+
+assert_python_ok "Original mode requires encryption caterpillar and expansion keys" "
+from src.pki import CITSPKI
+from src.types import PublicKeyAlgorithm, EtsiVersion
+from src.crypto import generate_keypair, random_bytes
+pki = CITSPKI(version=EtsiVersion.V1_2_1)
+pki.initialise()
+cat_s, _ = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
+try:
+    pki.issue_butterfly_authorization_tickets(cat_s, random_bytes(16), i_value=1, count=1, mode='original')
+except ValueError as e:
+    print('rejected:', e)
+else:
+    raise AssertionError('original mode without encryption keys accepted')
+"
+
 print_summary

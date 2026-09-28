@@ -1,5 +1,5 @@
 """
-Certificate structure encoding/decoding.
+Certificate structure encoding/decoding (v3: IEEE 1609.2-2016 / ETSI TS 103 097 v1.3.1).
 
 Covers the COER representations of:
   - Duration / ValidityPeriod              (IEEE 1609.2 clauses 6.3.24, 6.3.39)
@@ -9,383 +9,129 @@ Covers the COER representations of:
   - VerifyKeyIndicator                     (clause 6.4.7)
   - ToBeSignedCertificate                  (clause 6.4.6)
   - Certificate / EtsiTs103097Certificate  (clause 6.4.2)
+
+All encoding is done by asn1tools against the ASN.1 modules Vanetza compiles
+(see asn1_codec.py); these functions keep the tool's dataclass API and the
+``(value, new_offset)`` return convention of the decoders.
+
+Decoders are strict: COER is canonical, so the decoded value must re-encode to
+exactly the input bytes, otherwise a ValueError is raised.
 """
-from ..coer import (
-    encode_uint8, encode_uint16, encode_uint32,
-    encode_choice, encode_enumerated,
-    encode_octet_string, encode_utf8string,
-    decode_uint8, decode_uint16, decode_uint32,
-    decode_choice_tag, decode_octet_string, decode_utf8string,
-)
 from ..types import (
     Certificate, ToBeSignedCertificate, IssuerIdentifier, CertificateId,
-    ValidityPeriod, Duration, GeographicRegion, SubjectAssurance,
-    PsidSsp, PublicVerificationKey, EccPoint,
-    CertificateType, IssuerChoice, CertIdChoice, DurationChoice, RegionChoice,
-    PublicKeyAlgorithm, HashAlgorithm, EtsiVersion,
+    ValidityPeriod, Duration, GeographicRegion, PublicVerificationKey,
+    PublicKeyAlgorithm, EtsiVersion,
 )
-from .keys import (
-    encode_ecc_p256_point, decode_ecc_p256_point,
-    encode_public_verification_key, decode_public_verification_key,
-    encode_public_encryption_key, decode_public_encryption_key,
-    encode_signature, decode_signature,
-)
-from .permissions import (
-    encode_seq_of_psid_ssp, encode_seq_of_psid_group_permissions,
-    decode_psid,
-)
+from . import asn1_codec as codec
 
 
-# ── Duration encoding ─────────────────────────────────────────────────────────
+def _decode_canonical(type_name: str, data: bytes, offset: int):
+    """Decode a value at offset and return (asn1 value, encoded bytes consumed)."""
+    try:
+        value = codec.decode(type_name, bytes(data[offset:]))
+    except Exception as e:
+        raise ValueError(f"Invalid COER {type_name}: {e}") from None
+    encoded = codec.encode(type_name, value)
+    if bytes(data[offset:offset + len(encoded)]) != encoded:
+        raise ValueError(f"{type_name} is not canonical COER (re-encoding differs)")
+    return value, encoded
+
+
+# ── Duration / ValidityPeriod ────────────────────────────────────────────────
 
 def encode_duration(d: Duration) -> bytes:
-    """Duration CHOICE (IEEE 1609.2 clause 6.3.24): index tag + Uint16."""
-    return encode_choice(int(d.choice), encode_uint16(d.value))
+    """Duration CHOICE (IEEE 1609.2 clause 6.3.24)."""
+    return codec.encode('Duration', codec.duration_to_asn(d))
 
 
 def decode_duration(data: bytes, offset: int):
-    choice, offset = decode_choice_tag(data, offset)
-    value, offset = decode_uint16(data, offset)
-    return Duration(DurationChoice(choice), value), offset
+    value, enc = _decode_canonical('Duration', data, offset)
+    return codec.duration_from_asn(value), offset + len(enc)
 
-
-# ── ValidityPeriod encoding ───────────────────────────────────────────────────
 
 def encode_validity_period(vp: ValidityPeriod) -> bytes:
     """ValidityPeriod ::= SEQUENCE { start Time32, duration Duration }."""
-    return encode_uint32(vp.start) + encode_duration(vp.duration)
+    return codec.encode('ValidityPeriod',
+                        {'start': vp.start, 'duration': codec.duration_to_asn(vp.duration)})
 
 
 def decode_validity_period(data: bytes, offset: int):
-    start, offset = decode_uint32(data, offset)
-    duration, offset = decode_duration(data, offset)
-    return ValidityPeriod(start=start, duration=duration), offset
+    value, enc = _decode_canonical('ValidityPeriod', data, offset)
+    return (ValidityPeriod(start=value['start'], duration=codec.duration_from_asn(value['duration'])),
+            offset + len(enc))
 
 
-# ── GeographicRegion encoding ─────────────────────────────────────────────────
+# ── GeographicRegion ─────────────────────────────────────────────────────────
 
 def encode_geographic_region(region: GeographicRegion) -> bytes:
-    """
-    GeographicRegion CHOICE (IEEE 1609.2 clause 6.3.4):
-      [3] identifiedRegion: SequenceOfIdentifiedRegion
-
-    IdentifiedRegion CHOICE:
-      [2] countryOnly: UnCountryId (Uint16)
-
-    Supports EU-27 special value (65535) and arbitrary country IDs.
-    """
-    if region.choice == RegionChoice.ID and region.ids is not None:
-        items = b''
-        for region_id in region.ids:
-            items += encode_choice(2, encode_uint16(region_id))
-        # SequenceOf wrapper (length-prefixed list)
-        return encode_choice(3, encode_octet_string(items))
-    raise ValueError("Only identifiedRegion (choice=3) is currently supported")
+    """GeographicRegion CHOICE (clause 6.3.4); identifiedRegion/countryOnly only."""
+    return codec.encode('GeographicRegion', codec._region(region))
 
 
 def decode_geographic_region(data: bytes, offset: int):
-    choice, offset = decode_choice_tag(data, offset)
-    if choice == 3:     # identifiedRegion
-        raw, offset = decode_octet_string(data, offset)
-        ids = []
-        i = 0
-        while i < len(raw):
-            idr_choice = raw[i]; i += 1
-            if idr_choice == 2:     # countryOnly
-                cid = int.from_bytes(raw[i:i + 2], 'big'); i += 2
-                ids.append(cid)
-        return GeographicRegion(choice=RegionChoice.ID, ids=ids), offset
-    raise ValueError(f"Unsupported GeographicRegion choice: {choice}")
+    value, enc = _decode_canonical('GeographicRegion', data, offset)
+    return codec._region_from_asn(value), offset + len(enc)
 
 
-# ── IssuerIdentifier encoding ─────────────────────────────────────────────────
+# ── IssuerIdentifier / CertificateId / VerifyKeyIndicator ────────────────────
 
 def encode_issuer_identifier(issuer: IssuerIdentifier) -> bytes:
-    """
-    IssuerIdentifier CHOICE (IEEE 1609.2 clause 6.3.27):
-      sha256AndDigest [0]: HashedId8 (8 bytes)
-      self            [1]: HashAlgorithm (Uint8)
-      sha384AndDigest [2]: HashedId8 (8 bytes)
-    """
-    if issuer.choice == IssuerChoice.SHA256_AND_DIGEST:
-        return encode_choice(0, issuer.digest)
-    elif issuer.choice == IssuerChoice.SELF:
-        return encode_choice(1, encode_uint8(int(issuer.hash_alg)))
-    elif issuer.choice == IssuerChoice.SHA384_AND_DIGEST:
-        return encode_choice(2, issuer.digest)
-    raise ValueError(f"Unknown IssuerIdentifier choice: {issuer.choice}")
+    return codec.encode('IssuerIdentifier', codec._issuer(issuer))
 
 
 def decode_issuer_identifier(data: bytes, offset: int):
-    choice, offset = decode_choice_tag(data, offset)
-    if choice == 0:
-        digest = data[offset:offset + 8]; offset += 8
-        return IssuerIdentifier(IssuerChoice.SHA256_AND_DIGEST, digest=digest), offset
-    elif choice == 1:
-        alg, offset = decode_uint8(data, offset)
-        return IssuerIdentifier(IssuerChoice.SELF, hash_alg=HashAlgorithm(alg)), offset
-    elif choice == 2:
-        digest = data[offset:offset + 8]; offset += 8
-        return IssuerIdentifier(IssuerChoice.SHA384_AND_DIGEST, digest=digest), offset
-    raise ValueError(f"Unknown IssuerIdentifier choice: {choice}")
+    value, enc = _decode_canonical('IssuerIdentifier', data, offset)
+    return codec._issuer_from_asn(value), offset + len(enc)
 
-
-# ── CertificateId encoding ────────────────────────────────────────────────────
 
 def encode_certificate_id(cert_id: CertificateId) -> bytes:
-    """
-    CertificateId CHOICE (IEEE 1609.2 clause 6.4.3):
-      linkageData [0]
-      name        [1]: Hostname (VisibleString 0..255)
-      binaryId    [2]
-      none        [3]: NULL
-    """
-    if cert_id.choice == CertIdChoice.NAME:
-        return encode_choice(1, encode_utf8string(cert_id.name))
-    elif cert_id.choice == CertIdChoice.NONE:
-        return encode_choice(3, b'')
-    raise ValueError(f"Unsupported CertificateId choice: {cert_id.choice}")
+    return codec.encode('CertificateId', codec._cert_id(cert_id))
 
 
 def decode_certificate_id(data: bytes, offset: int):
-    choice, offset = decode_choice_tag(data, offset)
-    if choice == 1:
-        name, offset = decode_utf8string(data, offset)
-        return CertificateId(CertIdChoice.NAME, name=name), offset
-    elif choice == 3:
-        return CertificateId(CertIdChoice.NONE), offset
-    raise ValueError(f"Unsupported CertificateId choice: {choice}")
+    value, enc = _decode_canonical('CertificateId', data, offset)
+    return codec._cert_id_from_asn(value), offset + len(enc)
 
-
-# ── VerifyKeyIndicator encoding ───────────────────────────────────────────────
 
 def encode_verify_key_indicator(vk: PublicVerificationKey) -> bytes:
-    """
-    VerifyKeyIndicator CHOICE (IEEE 1609.2 clause 6.4.7):
-      verificationKey    [0]: PublicVerificationKey  (explicit cert)
-      reconstructionValue[1]: EccP256CurvePoint      (implicit cert)
-    We support explicit certificates (verificationKey).
-    """
-    return encode_choice(0, encode_public_verification_key(vk))
+    return codec.encode('VerificationKeyIndicator', ('verificationKey', codec._verification_key(vk)))
 
 
 def decode_verify_key_indicator(data: bytes, offset: int):
-    choice, offset = decode_choice_tag(data, offset)
-    if choice == 0:
-        vk, offset = decode_public_verification_key(data, offset)
-        return vk, offset
-    elif choice == 1:
-        # implicit: reconstruction value (EccP256CurvePoint)
-        point, offset = decode_ecc_p256_point(data, offset)
-        return point, offset   # caller must handle EccPoint vs PublicVerificationKey
-    raise ValueError(f"Unsupported VerifyKeyIndicator choice: {choice}")
+    value, enc = _decode_canonical('VerificationKeyIndicator', data, offset)
+    name, vki = value
+    if name == 'verificationKey':
+        key_name, point = vki
+        if key_name != 'ecdsaNistP256':
+            raise ValueError(f"Unsupported verification key type: {key_name}")
+        return PublicVerificationKey(PublicKeyAlgorithm.ECDSA_NIST_P256,
+                                     codec._point_from_asn(point)), offset + len(enc)
+    return codec._point_from_asn(vki), offset + len(enc)
 
 
-# ── ToBeSignedCertificate encoding ────────────────────────────────────────────
+# ── ToBeSignedCertificate / Certificate ──────────────────────────────────────
 
 def encode_tbs_certificate(tbs: ToBeSignedCertificate,
                            version: EtsiVersion = EtsiVersion.V2_2_1) -> bytes:
     """
-    ToBeSignedCertificate SEQUENCE (IEEE 1609.2 clause 6.4.6).
+    ToBeSignedCertificate (IEEE 1609.2-2016 clause 6.4.8) as canonical COER.
 
-    Mandatory fields (always present):
-      id, cracaId, crlSeries, validityPeriod
-
-    V2.2.1 (IEEE 1609.2-2022/2025) — 2-byte presence bitmap, 8 optional fields:
-      bit 15: region
-      bit 14: assuranceLevel
-      bit 13: appPermissions
-      bit 12: certIssuePermissions
-      bit 11: certRequestPermissions  (always absent)
-      bit 10: canRequestRollover      (always absent)
-      bit  9: encryptionKey
-      bit  8: flags                   (always absent)
-
-    V1.2.1 (IEEE 1609.2-2016) — 1-byte presence bitmap, 7 optional fields:
-      bit 7: region
-      bit 6: assuranceLevel
-      bit 5: appPermissions
-      bit 4: certIssuePermissions
-      bit 3: certRequestPermissions   (always absent)
-      bit 2: canRequestRollover       (always absent)
-      bit 1: encryptionKey
-      No ``flags`` field.
-
-    verifyKeyIndicator is mandatory (follows after optional fields).
+    ``version`` is accepted for API compatibility only: v3 certificates are
+    always encoded with the IEEE 1609.2-2016 schema that Vanetza uses.
     """
-    id_enc  = encode_certificate_id(tbs.id)
-    craca   = tbs.craca_id                   # 3 bytes fixed (HashedId3)
-    crl_enc = encode_uint16(tbs.crl_series)
-    vp_enc  = encode_validity_period(tbs.validity_period)
-
-    # Compute optional field presence
-    has_region   = tbs.region is not None
-    has_assure   = tbs.assurance_level is not None
-    has_app      = bool(tbs.app_permissions)
-    has_issue    = bool(tbs.cert_issue_permissions)
-    has_enc_key  = tbs.encryption_key is not None
-
-    # Mandatory part
-    result = id_enc + craca + crl_enc + vp_enc
-
-    if version == EtsiVersion.V1_2_1:
-        # 1-byte bitmap (7 optional fields, IEEE 1609.2-2016)
-        bitmap = 0
-        if has_region:   bitmap |= 0x80  # bit 7
-        if has_assure:   bitmap |= 0x40  # bit 6
-        if has_app:      bitmap |= 0x20  # bit 5
-        if has_issue:    bitmap |= 0x10  # bit 4
-        # bit 3: certRequestPermissions — always absent
-        # bit 2: canRequestRollover     — always absent
-        if has_enc_key:  bitmap |= 0x02  # bit 1
-        result += bytes([bitmap])
-    else:
-        # 2-byte bitmap (8 optional fields, IEEE 1609.2-2022/2025)
-        bitmap = 0
-        if has_region:   bitmap |= (1 << 15)
-        if has_assure:   bitmap |= (1 << 14)
-        if has_app:      bitmap |= (1 << 13)
-        if has_issue:    bitmap |= (1 << 12)
-        if has_enc_key:  bitmap |= (1 << 9)
-        result += bitmap.to_bytes(2, 'big')
-
-    # Optional fields (in order, only if present — same for both versions)
-    if has_region:
-        result += encode_geographic_region(tbs.region)
-    if has_assure:
-        level = tbs.assurance_level
-        result += bytes([(level.level << 5) | (level.confidence & 0x03)])
-    if has_app:
-        result += encode_seq_of_psid_ssp(tbs.app_permissions)
-    if has_issue:
-        result += encode_seq_of_psid_group_permissions(tbs.cert_issue_permissions)
-    if has_enc_key:
-        result += encode_public_encryption_key(tbs.encryption_key)
-
-    # Mandatory: verifyKeyIndicator
-    if tbs.verify_key_indicator is not None:
-        result += encode_verify_key_indicator(tbs.verify_key_indicator)
-    else:
-        raise ValueError("verifyKeyIndicator is required for explicit certificates")
-
-    return result
+    return codec.encode(codec.TBS_TYPE, codec.tbs_to_asn(tbs))
 
 
 def decode_tbs_certificate(data: bytes, offset: int,
                            version: EtsiVersion = EtsiVersion.V2_2_1):
-    """Decode ToBeSignedCertificate. Returns (tbs, offset)."""
-    cert_id, offset = decode_certificate_id(data, offset)
-    craca_id = data[offset:offset + 3]; offset += 3
-    crl_series, offset = decode_uint16(data, offset)
-    vp, offset = decode_validity_period(data, offset)
+    value, enc = _decode_canonical(codec.TBS_TYPE, data, offset)
+    return codec.tbs_from_asn(value), offset + len(enc)
 
-    region = assurance = app_perms = cert_issue = enc_key = None
-
-    if version == EtsiVersion.V1_2_1:
-        # 1-byte presence bitmap (7 optional fields, IEEE 1609.2-2016)
-        bitmap = data[offset]; offset += 1
-        if bitmap & 0x80:   # bit 7: region
-            region, offset = decode_geographic_region(data, offset)
-        if bitmap & 0x40:   # bit 6: assuranceLevel
-            b = data[offset]; offset += 1
-            assurance = SubjectAssurance(level=(b >> 5) & 0x7, confidence=b & 0x03)
-        if bitmap & 0x20:   # bit 5: appPermissions
-            raw, offset = decode_octet_string(data, offset)
-            app_perms = _decode_seq_of_psid_ssp(raw)
-        if bitmap & 0x10:   # bit 4: certIssuePermissions
-            raw, offset = decode_octet_string(data, offset)
-            cert_issue = []
-        # bit 3: certRequestPermissions — always absent
-        # bit 2: canRequestRollover     — always absent
-        if bitmap & 0x02:   # bit 1: encryptionKey
-            enc_key, offset = decode_public_encryption_key(data, offset)
-    else:
-        # 2-byte presence bitmap (8 optional fields, IEEE 1609.2-2022/2025)
-        bitmap = int.from_bytes(data[offset:offset + 2], 'big'); offset += 2
-        if bitmap & (1 << 15):   # region
-            region, offset = decode_geographic_region(data, offset)
-        if bitmap & (1 << 14):   # assuranceLevel
-            b = data[offset]; offset += 1
-            assurance = SubjectAssurance(level=(b >> 5) & 0x7, confidence=b & 0x03)
-        if bitmap & (1 << 13):   # appPermissions
-            raw, offset = decode_octet_string(data, offset)
-            app_perms = _decode_seq_of_psid_ssp(raw)
-        if bitmap & (1 << 12):   # certIssuePermissions
-            raw, offset = decode_octet_string(data, offset)
-            cert_issue = []
-        # bits 11, 10: certRequestPermissions, canRequestRollover — always absent
-        if bitmap & (1 << 9):    # encryptionKey
-            enc_key, offset = decode_public_encryption_key(data, offset)
-        # bit 8: flags — always absent in our implementation
-
-    # verifyKeyIndicator (mandatory)
-    vki, offset = decode_verify_key_indicator(data, offset)
-
-    return ToBeSignedCertificate(
-        id=cert_id,
-        craca_id=craca_id,
-        crl_series=crl_series,
-        validity_period=vp,
-        region=region,
-        assurance_level=assurance,
-        app_permissions=app_perms,
-        cert_issue_permissions=cert_issue,
-        encryption_key=enc_key,
-        verify_key_indicator=vki if isinstance(vki, PublicVerificationKey) else None,
-        reconstruction_value=vki if isinstance(vki, EccPoint) else None,
-    ), offset
-
-
-def _decode_seq_of_psid_ssp(raw: bytes) -> list:
-    """Decode SequenceOfPsidSsp from raw bytes."""
-    perms = []
-    i = 0
-    while i < len(raw):
-        # 1-byte bitmap
-        has_ssp = bool(raw[i] & 0x80); i += 1
-        # PSID
-        psid, i = decode_psid(raw, i)
-        ssp = None
-        if has_ssp:
-            ssp_choice = raw[i]; i += 1    # should be 0 (opaque)
-            ssp_len_b = raw[i]
-            if ssp_len_b < 0x80:
-                ssp_len = ssp_len_b; i += 1
-            else:
-                nb = ssp_len_b & 0x7F
-                ssp_len = int.from_bytes(raw[i + 1:i + 1 + nb], 'big')
-                i += 1 + nb
-            ssp = raw[i:i + ssp_len]; i += ssp_len
-        perms.append(PsidSsp(psid=psid, ssp=ssp))
-    return perms
-
-
-# ── Certificate encoding ──────────────────────────────────────────────────────
 
 def encode_certificate(cert: Certificate,
                        version: EtsiVersion = EtsiVersion.V2_2_1) -> bytes:
-    """
-    EtsiTs103097Certificate (IEEE 1609.2 clause 6.4.2):
-    Certificate ::= SEQUENCE {
-      version    Uint8 (3),
-      type       CertificateType ENUMERATED { explicit(0), implicit(1) },
-      issuer     IssuerIdentifier,
-      toBeSigned ToBeSignedCertificate,
-      signature  Signature OPTIONAL
-    }
-    The single optional field (signature) is indicated by a 1-byte bitmap.
-    The ``version`` parameter controls the TBS bitmap width (see encode_tbs_certificate).
-    """
-    version_enc = encode_uint8(cert.version)
-    type_enc    = encode_enumerated(int(cert.cert_type))
-    issuer_enc  = encode_issuer_identifier(cert.issuer)
-    tbs_enc     = encode_tbs_certificate(cert.tbs, version=version)
-
-    has_sig  = cert.signature is not None
-    bitmap   = bytes([0x80]) if has_sig else bytes([0x00])
-    sig_enc  = encode_signature(cert.signature) if has_sig else b''
-
-    return version_enc + type_enc + issuer_enc + tbs_enc + bitmap + sig_enc
+    """EtsiTs103097Certificate (TS 103 097 v1.3.1 clause 6) as canonical COER."""
+    return codec.encode(codec.CERTIFICATE_TYPE, codec.certificate_to_asn(cert))
 
 
 def decode_certificate(data: bytes, offset: int = 0,
@@ -393,33 +139,12 @@ def decode_certificate(data: bytes, offset: int = 0,
     """
     Decode an EtsiTs103097Certificate from COER bytes. Returns (cert, offset).
 
-    The ``version`` parameter must match the standard version that was used to
-    encode the certificate so that the correct TBS bitmap width is applied.
+    Populates ``cert.encoded`` (exact certificate bytes, used for HashedId8 and
+    as issuer input when verifying subordinate certificates) and
+    ``cert.tbs_encoded`` (canonical COER of toBeSigned, used for verification).
     """
-    cert_version, offset  = decode_uint8(data, offset)
-    cert_type_raw, offset = decode_uint8(data, offset)    # ENUMERATED encoded as Uint8
-    cert_type             = CertificateType(cert_type_raw)
-    issuer, offset        = decode_issuer_identifier(data, offset)
-    tbs_start             = offset
-    tbs, offset           = decode_tbs_certificate(data, offset, version=version)
-    tbs_end               = offset
-
-    # 1-byte presence bitmap for the optional signature field
-    sig = None
-    if offset < len(data):
-        bitmap = data[offset]; offset += 1
-        if bitmap & 0x80:
-            sig, offset = decode_signature(data, offset)
-
-    cert = Certificate(
-        version=cert_version,
-        cert_type=cert_type,
-        issuer=issuer,
-        tbs=tbs,
-        signature=sig,
-    )
-    cert.encoded     = data[:offset]
-    # Cache the original TBS bytes so verify_certificate_signature can use
-    # the exact bytes that were signed (avoids re-encoding discrepancies).
-    cert.tbs_encoded = data[tbs_start:tbs_end]
-    return cert, offset
+    value, enc = _decode_canonical(codec.CERTIFICATE_TYPE, data, offset)
+    cert = codec.certificate_from_asn(value)
+    cert.encoded = enc
+    cert.tbs_encoded = codec.encode(codec.TBS_TYPE, value['toBeSigned'])
+    return cert, offset + len(enc)

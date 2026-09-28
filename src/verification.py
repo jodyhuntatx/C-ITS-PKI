@@ -11,7 +11,7 @@ from .types import (
 )
 from .crypto import (
     ecdsa_verify, hash_certificate, hash_data,
-    load_public_key_from_compressed
+    load_public_key_from_compressed, ieee1609_signing_input
 )
 from .encoding import encode_tbs_certificate
 
@@ -55,9 +55,17 @@ def verify_certificate_signature(cert: Certificate,
     # otherwise re-encode from the parsed structure.
     tbs_encoded = cert.tbs_encoded if cert.tbs_encoded else encode_tbs_certificate(cert.tbs)
 
+    if cert.version == 3:
+        # IEEE 1609.2 clause 5.3.1.2.2: Hash(Hash(tbs) || Hash(issuer cert or empty string))
+        signer_encoded = b'' if cert.issuer.choice == IssuerChoice.SELF else issuer_cert.encoded
+        data = ieee1609_signing_input(tbs_encoded, signer_encoded, cert.signature.algorithm)
+    else:
+        # vanetza v2 (TS 103 097 v1.2.1): ECDSA over the certificate's signing input
+        data = tbs_encoded
+
     return ecdsa_verify(
         public_key=pub_key,
-        data=tbs_encoded,
+        data=data,
         r_bytes=cert.signature.r,
         s_bytes=cert.signature.s,
         algorithm=cert.signature.algorithm,

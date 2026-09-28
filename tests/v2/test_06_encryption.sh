@@ -144,15 +144,109 @@ at_priv, at_pub = generate_keypair(PublicKeyAlgorithm.ECDSA_NIST_P256)
 at = issue_authorization_ticket(at_priv, at_pub, aa, aa_s_priv, version=EtsiVersion.V1_2_1)
 
 payload = b'Signed-and-encrypted test payload'
-se = sign_and_encrypt(payload, int(ItsAid.CAM), at_priv, at.encoded, ea.encoded, ea_e_pub)
+# v2: CAMs shall not be encrypted (clause 7.1); use a generic ITS-AID with generation_location (7.3)
+se = sign_and_encrypt(payload, int(ItsAid.CERT_REQUEST), at_priv, at.encoded, ea.encoded, ea_e_pub,
+                      generation_location=(525200000, 134050000, 340))
 assert len(se) > 100
 
 vk = at.tbs.verify_key_indicator
 at_pub_key = load_public_key_from_compressed(vk.point.curve, vk.point.compressed)
-result = decrypt_and_verify(se, ea_e_priv, ea.encoded, at_pub_key)
+result = decrypt_and_verify(se, ea_e_priv, ea.encoded, at_pub_key, signer_cert_encoded=at.encoded)
 assert result['valid'], f'Verify failed: {result.get(\"error\")}'
 assert result['payload'] == payload
 print('SignedAndEncrypted roundtrip OK')
+"
+
+
+section "ECIES (IEEE 1609.2 clause 5.3.5)"
+
+assert_python_ok "ECIES matches the SCMS reference test vectors" "
+from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, derive_private_key
+from src.crypto import ecies_encrypt, ecies_decrypt
+H = bytes.fromhex
+# conz27/crypto-test-vectors ecies.py / ecies.txt (fixed ephemeral key v)
+eph = derive_private_key(0x1384C31D6982D52BCA3BED8A7E60F52FECDAB44E5C0EA166815A8159E09FFB42, SECP256R1())
+for k, p1, r, C, T in [
+    ('9169155B08B07674CBADF75FB46A7B0D', 'A6B7B52554B4203F7E3ACFDB3A3ED8674EE086CE5906A7CAC2F8A398306D3BE9',
+     0x060E41440A4E35154CA0EFCB52412145836AD032833E6BC781E533BF14851085, 'A6342013D623AD6C5F6882469673AE33', '80e1d85d30f1bae4ecf1a534a89a0786'),
+    ('687E9757DEBFD87B0C267330C183C7B6', '05BED5F867B89F30FE5552DF414B65B9DD4073FC385D14921C641A145AA12051',
+     0xDA5E1D853FCC5D0C162A245B9F29D38EB6059F0DB172FB7FDA6663B925E8C744, '1F6346EDAEAF57561FC9604FEBEFF44E', '373c0fa7c52a0798ec36eadfe387c3ef')]:
+    recipient = derive_private_key(r, SECP256R1())
+    out = ecies_encrypt(recipient.public_key(), H(k), H(p1), ephemeral_priv_key=eph)
+    assert (out['c'], out['t']) == (H(C), H(T))
+    assert ecies_decrypt(recipient, out['v'], out['c'], out['t'], H(p1)) == H(k)
+print('both reference vectors match')
+"
+
+section "Encrypted message negative cases"
+
+assert_python_ok "Wrong recipient, tampered ciphertext and mixed versions are rejected" "
+from src.pki import CITSPKI
+from src.types import EtsiVersion, PublicKeyAlgorithm
+from src.crypto import load_public_key_from_compressed
+from src.encryption import encrypt_data, decrypt_data, sign_and_encrypt, decrypt_and_verify
+pki = CITSPKI(version=EtsiVersion.V1_2_1)
+pki.initialise()
+ea_cert = pki.ea.certificate.encoded
+ea_pub, ea_priv = pki.ea.enc_pub_key, pki.ea.enc_priv_key
+at = pki.issue_authorization_ticket()
+enc = encrypt_data(b'secret', ea_cert, ea_pub)
+aa_cert, aa_enc_priv = pki.aa.certificate.encoded, pki.aa.enc_priv_key
+for bad, what in [((enc, aa_enc_priv, aa_cert), 'other recipient'),
+                  ((enc[:-1] + bytes([enc[-1] ^ 1]), ea_priv, ea_cert), 'tampered ciphertext')]:
+    try:
+        decrypt_data(*bad)
+    except Exception:
+        pass
+    else:
+        raise AssertionError(what + ' accepted')
+other = CITSPKI(version=EtsiVersion.V2_2_1); other.initialise()
+try:
+    sign_and_encrypt(b'x', 36, at['sign_priv_key'], at['at'], other.ea.certificate.encoded, other.ea.enc_pub_key)
+except ValueError as e:
+    print('mixed versions rejected:', e)
+else:
+    raise AssertionError('mixed-version sign_and_encrypt accepted')
+print('negative cases rejected')
+"
+
+section "Conformance: v2 encrypted SecuredMessage (TS 103 097 v1.2.1)"
+
+assert_python_ok "Encrypted SecuredMessage layout, recipient id and empty ECIES P1" "
+from src.pki import CITSPKI
+from src.types import EtsiVersion, PublicKeyAlgorithm
+from src.crypto import load_public_key_from_compressed
+from src.encryption import encrypt_data, decrypt_data, sign_and_encrypt, decrypt_and_verify
+pki = CITSPKI(version=EtsiVersion.V1_2_1)
+pki.initialise()
+ea_cert = pki.ea.certificate.encoded
+ea_pub, ea_priv = pki.ea.enc_pub_key, pki.ea.enc_priv_key
+at = pki.issue_authorization_ticket()
+import hashlib
+from src.v1_encoding import hash_certificate_v1
+from src.crypto import ecies_decrypt
+from src.signing import v2_parse
+enc = encrypt_data(b'payload', ea_cert, ea_pub)
+msg = v2_parse(enc)
+assert enc[0] == 2 and msg['payload_type'] == 2 and msg['trailer'] == b''
+assert len(msg['nonce']) == 12 and len(msg['recipients']) == 1
+rcp = msg['recipients'][0]
+assert rcp['cert_id'] == hash_certificate_v1(ea_cert)
+ecies_decrypt(ea_priv, rcp['v'], rcp['c'], rcp['t'], b'')        # v1.2.1: P1 empty
+try:
+    ecies_decrypt(ea_priv, rcp['v'], rcp['c'], rcp['t'], hashlib.sha256(ea_cert).digest())
+    raise AssertionError('v3-style P1 accepted for v2')
+except ValueError:
+    pass
+se = sign_and_encrypt(b'payload', 623, at['sign_priv_key'], at['at'], ea_cert, ea_pub, generation_location=(525200000, 134050000, 340))
+sm = v2_parse(se)
+assert sm['signer_cert'] is not None and sm['generation_location'] == (525200000, 134050000, 340), 'generic profile (clause 7.3)'
+assert sm['payload_type'] == 4 and sm['payload'] != b'payload' and len(sm['trailer']) == 67
+r = decrypt_and_verify(se, ea_priv, ea_cert, None, signer_cert_encoded=at['at'])
+assert r['valid'] and r['payload'] == b'payload' and r['format'] == 'v2'
+tampered = bytearray(se); tampered[sm['trailer_start'] - 2] ^= 1   # last ciphertext byte (before the trailer length)
+assert not decrypt_and_verify(bytes(tampered), ea_priv, ea_cert, None, signer_cert_encoded=at['at'])['valid']
+print('v2 encrypted and signed-and-encrypted messages conform')
 "
 
 print_summary

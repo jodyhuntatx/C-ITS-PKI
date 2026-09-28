@@ -1,159 +1,176 @@
 """
-Message encryption per ETSI TS 103 097 V2.2.1 clause 5.3.
-Produces EtsiTs103097Data-Encrypted structures using ECIES + AES-128-CCM.
-"""
-import os
-from typing import Optional, List
+Message encryption for the two formats vanetza supports, chosen by the recipient
+certificate (like signing.py chooses by the signer certificate):
 
-from .types import PublicKeyAlgorithm, RecipientChoice
-from .coer import (
-    encode_uint8, encode_octet_string, encode_choice, encode_length
-)
+  v3 — EtsiTs103097Data-Encrypted (ETSI TS 103 097 v1.3.1 clause 5.3 / IEEE 1609.2-2016),
+       canonical COER via asn1tools: encryptedData { recipients: [certRecipInfo],
+       ciphertext: aes128ccm }. ECIES P1 = SHA-256 of the recipient certificate
+       (IEEE 1609.2 clause 6.3.34, certRecipInfo).
+       Signed-and-encrypted = EtsiTs103097Data-Encrypted containing an
+       EtsiTs103097Data-Signed (TS 103 097 clause 5.1).
+
+  v2 — SecuredMessage (ETSI TS 103 097 v1.2.1), vanetza binary format: header fields
+       encryption_parameters (AES-128-CCM + nonce) and recipient_info (ECIES NIST P-256),
+       payload type encrypted, or signed_and_encrypted with a signature trailer over
+       the whole message including the ciphertext. ECIES P1 = empty string.
+
+AES-128-CCM uses a 12-byte nonce and a 16-byte tag in both formats; ECIES wraps the
+fresh 16-byte AES key (crypto.ecies_encrypt / ecies_decrypt).
+"""
+import hashlib
+from typing import Optional
+
+from .types import PublicKeyAlgorithm, now_its_time64
 from .crypto import (
     ecies_encrypt, ecies_decrypt,
     aes_ccm_encrypt, aes_ccm_decrypt,
-    random_bytes, hash_certificate
+    random_bytes, hash_certificate,
 )
-from .signing import _make_ieee1609dot2_data
+from .encoding import asn1_codec as codec
+from . import signing
+from . import v1_encoding as v2enc
 
 
-# ── RecipientInfo encoding ────────────────────────────────────────────────────
-
-def _encode_cert_recip_info(cert: bytes,
-                             algorithm: PublicKeyAlgorithm,
-                             ecies_result: dict) -> bytes:
-    """
-    certRecipInfo [2]:
-    PKRecipientInfo ::= SEQUENCE {
-      recipientId  HashedId8,        -- last 8 bytes of cert hash (SHA-256)
-      encKey       EncryptedDataEncryptionKey
-    }
-    EncryptedDataEncryptionKey CHOICE:
-      eciesNistP256EncryptedKey [0]: EciesP256EncryptedKey
-    EciesP256EncryptedKey ::= SEQUENCE {
-      v    EccP256CurvePoint,  -- compressed (33 bytes: choice tag + 32 byte x)
-      c    OCTET STRING (SIZE(16)),
-      t    OCTET STRING (SIZE(16))
-    }
-    """
-    recip_id = hash_certificate(cert, algorithm)  # 8 bytes
-
-    # Encode v (ephemeral public key) as compressed EccP256CurvePoint
-    v = ecies_result['v']       # 33 bytes (prefix + x)
-    c = ecies_result['c']       # 16 bytes
-    t = ecies_result['t']       # 16 bytes
-
-    # Compressed point: prefix 0x02 -> y0 (choice 2), 0x03 -> y1 (choice 3)
-    prefix = v[0]
-    y_tag = 2 if prefix == 0x02 else 3
-    v_enc = encode_choice(y_tag, v[1:])   # x-coordinate only (32 bytes)
-
-    ecies_key = v_enc + c + t  # EciesP256EncryptedKey fields (fixed sizes, no length prefix)
-    enc_key = encode_choice(0, ecies_key)  # eciesNistP256EncryptedKey
-
-    pk_recip_info = recip_id + enc_key
-    return encode_choice(RecipientChoice.CERT_RECIP_INFO, pk_recip_info)
+_V3_DATA_TYPE = 'EtsiTs103097Data'
 
 
-def _decode_ecies_recip_info(data: bytes, offset: int) -> tuple:
-    """
-    Decode a certRecipInfo entry.
-    Returns (recip_id: bytes, v: bytes, c: bytes, t: bytes, new_offset: int).
-    """
-    recip_id = data[offset:offset+8]; offset += 8
-
-    # EncryptedDataEncryptionKey CHOICE
-    enc_key_choice = data[offset]; offset += 1  # should be 0 (eciesNistP256)
-
-    # EciesP256EncryptedKey
-    # v: EccP256CurvePoint (compressed)
-    v_choice = data[offset]; offset += 1  # 2 or 3
-    x = data[offset:offset+32]; offset += 32
-    prefix = 0x02 if v_choice == 2 else 0x03
-    v = bytes([prefix]) + x
-
-    c = data[offset:offset+16]; offset += 16
-    t = data[offset:offset+16]; offset += 16
-
-    return recip_id, v, c, t, offset
+def _require_p256(algorithm: PublicKeyAlgorithm) -> None:
+    if algorithm != PublicKeyAlgorithm.ECDSA_NIST_P256:
+        raise ValueError("vanetza encrypted messages (v2 and v3) are NIST P-256 only")
 
 
-# ── SymmetricCiphertext encoding ─────────────────────────────────────────────
-
-def _encode_aes128ccm_ciphertext(nonce: bytes, ciphertext: bytes) -> bytes:
-    """
-    SymmetricCiphertext CHOICE:
-      aes128ccm [0]: AesCcmCiphertext ::= SEQUENCE {
-        nonce  OCTET STRING (SIZE(12)),
-        ccmCiphertext OPAQUE (variable)
-      }
-    """
-    aes_ccm_ct = nonce + encode_octet_string(ciphertext)
-    return encode_choice(0, aes_ccm_ct)
+def _wrap_key(recipient_enc_pub_key, p1: bytes):
+    """Fresh AES-128 key and nonce; returns (aes_key, nonce, ecies result)."""
+    aes_key = random_bytes(16)
+    nonce = random_bytes(12)   # unique per encryption (NFR-SEC-04)
+    return aes_key, nonce, ecies_encrypt(recipient_enc_pub_key, aes_key, p1)
 
 
-def _decode_aes128ccm_ciphertext(data: bytes, offset: int) -> tuple:
-    """Returns (nonce, ciphertext, new_offset)."""
-    sym_choice = data[offset]; offset += 1  # should be 0
-    nonce = data[offset:offset+12]; offset += 12
-    ct_len_b = data[offset]
-    if ct_len_b < 0x80:
-        ct_len = ct_len_b; offset += 1
+# ── v3: EtsiTs103097Data-Encrypted (COER) ────────────────────────────────────
+
+def _v3_encrypt(plaintext: bytes, recipient_cert_encoded: bytes, recipient_enc_pub_key) -> bytes:
+    p1 = hashlib.sha256(recipient_cert_encoded).digest()   # certRecipInfo
+    aes_key, nonce, wrapped = _wrap_key(recipient_enc_pub_key, p1)
+    v = wrapped['v']
+    return codec.encode(_V3_DATA_TYPE, {
+        'protocolVersion': 3,
+        'content': ('encryptedData', {
+            'recipients': [('certRecipInfo', {
+                'recipientId': hash_certificate(recipient_cert_encoded, PublicKeyAlgorithm.ECDSA_NIST_P256),
+                'encKey': ('eciesNistP256', {
+                    'v': ('compressed-y-0' if v[0] == 0x02 else 'compressed-y-1', v[1:]),
+                    'c': wrapped['c'],
+                    't': wrapped['t'],
+                }),
+            })],
+            'ciphertext': ('aes128ccm', {
+                'nonce': nonce,
+                'ccmCiphertext': aes_ccm_encrypt(aes_key, nonce, plaintext),
+            }),
+        }),
+    })
+
+
+def _v3_decrypt(message: bytes, recipient_enc_priv_key, my_cert_encoded: bytes) -> bytes:
+    try:
+        value = codec.decode(_V3_DATA_TYPE, message)
+        if codec.encode(_V3_DATA_TYPE, value) != message:
+            raise ValueError("re-encoding differs")
+    except Exception as e:
+        raise ValueError(f"not a canonical COER EtsiTs103097Data: {e}") from None
+    kind, encrypted = value['content']
+    if kind != 'encryptedData':
+        raise ValueError(f"expected encryptedData, got {kind}")
+
+    my_id = hash_certificate(my_cert_encoded, PublicKeyAlgorithm.ECDSA_NIST_P256)
+    for recip_kind, info in encrypted['recipients']:
+        if recip_kind == 'certRecipInfo' and info['recipientId'] == my_id:
+            key_kind, key = info['encKey']
+            if key_kind != 'eciesNistP256':
+                raise ValueError(f"unsupported encKey {key_kind}")
+            point_kind, x = key['v']
+            prefix = {'compressed-y-0': 0x02, 'compressed-y-1': 0x03}.get(point_kind)
+            if prefix is not None:
+                v = bytes([prefix]) + x
+            elif point_kind == 'uncompressedP256':
+                v = b'\x04' + x['x'] + x['y']
+            else:
+                raise ValueError(f"unsupported ECIES ephemeral key {point_kind}")
+            aes_key = ecies_decrypt(recipient_enc_priv_key, v, key['c'], key['t'],
+                                    hashlib.sha256(my_cert_encoded).digest())
+            break
     else:
-        nb = ct_len_b & 0x7F
-        ct_len = int.from_bytes(data[offset+1:offset+1+nb], 'big')
-        offset += 1 + nb
-    ciphertext = data[offset:offset+ct_len]; offset += ct_len
-    return nonce, ciphertext, offset
+        raise ValueError("No matching certRecipInfo recipient found in EncryptedData")
+
+    ct_kind, ct = encrypted['ciphertext']
+    if ct_kind != 'aes128ccm':
+        raise ValueError(f"unsupported symmetric ciphertext {ct_kind}")
+    return aes_ccm_decrypt(aes_key, ct['nonce'], ct['ccmCiphertext'])
 
 
-# ── EncryptedData / EtsiTs103097Data-Encrypted ───────────────────────────────
+# ── v2: SecuredMessage (TS 103 097 v1.2.1) ───────────────────────────────────
+
+def _v2_encryption_fields(recipient_cert_encoded: bytes, recipient_enc_pub_key):
+    """encryption_parameters + recipient_info header fields; returns (fields, aes_key, nonce)."""
+    aes_key, nonce, wrapped = _wrap_key(recipient_enc_pub_key, b'')   # v1.2.1: P1 empty
+    enc_params = (bytes([signing._V2_HEADER_ENCRYPTION_PARAMETERS, signing._V2_AES128_CCM]) + nonce)
+    recipient = (v2enc.hash_certificate_v1(recipient_cert_encoded)
+                 + bytes([signing._V2_ECIES_NISTP256])
+                 + wrapped['v']                       # EccPoint: type 0x02/0x03 + x
+                 + wrapped['c'] + wrapped['t'])
+    recipients = (bytes([signing._V2_HEADER_RECIPIENT_INFO])
+                  + v2enc.encode_length(len(recipient)) + recipient)
+    return enc_params + recipients, aes_key, nonce
+
+
+def _v2_encrypt(plaintext: bytes, recipient_cert_encoded: bytes, recipient_enc_pub_key,
+                generation_time_us: int) -> bytes:
+    extra, aes_key, nonce = _v2_encryption_fields(recipient_cert_encoded, recipient_enc_pub_key)
+    fields = signing._v2_header_fields(None, True, None, generation_time_us, None, None, extra)
+    ciphertext = aes_ccm_encrypt(aes_key, nonce, plaintext)
+    # unsigned: empty trailer field list
+    return signing._v2_message_prefix(fields, signing._V2_PAYLOAD_ENCRYPTED, ciphertext) + b'\x00'
+
+
+def _v2_decrypt(message: bytes, recipient_enc_priv_key, my_cert_encoded: bytes) -> bytes:
+    msg = signing.v2_parse(message)
+    if msg['payload_type'] not in (signing._V2_PAYLOAD_ENCRYPTED, signing._V2_PAYLOAD_SIGNED_AND_ENCRYPTED):
+        raise ValueError(f"payload type {msg['payload_type']} is not encrypted")
+    if msg['nonce'] is None:
+        raise ValueError("missing encryption_parameters header field")
+    my_id = v2enc.hash_certificate_v1(my_cert_encoded)
+    for recipient in msg['recipients']:
+        if recipient['cert_id'] == my_id:
+            aes_key = ecies_decrypt(recipient_enc_priv_key, recipient['v'], recipient['c'], recipient['t'], b'')
+            break
+    else:
+        raise ValueError("No matching recipient found in recipient_info")
+    return aes_ccm_decrypt(aes_key, msg['nonce'], msg['payload'])
+
+
+# ── Public API ───────────────────────────────────────────────────────────────
 
 def encrypt_data(plaintext: bytes,
                  recipient_cert_encoded: bytes,
                  recipient_enc_pub_key,
-                 algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256) -> bytes:
+                 algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256,
+                 generation_time_us: Optional[int] = None) -> bytes:
     """
-    Encrypt data for a single recipient (EtsiTs103097Data-Encrypted-Unicast).
-
-    Process per IEEE 1609.2 §5.3.5 / ETSI TS 103 097 clause 5.3:
-      1. Generate random 16-byte AES key A and 12-byte nonce n.
-      2. Encrypt plaintext with AES-128-CCM(A, n).
-      3. Encrypt A using ECIES with recipient's public encryption key.
-      4. Pack into EncryptedData structure.
+    Encrypt data for a single recipient: EtsiTs103097Data-Encrypted-Unicast (v3
+    recipient certificate) or an encrypted v2 SecuredMessage (v2 certificate).
 
     Args:
-        plaintext: Data to encrypt (bytes).
-        recipient_cert_encoded: COER-encoded recipient certificate.
-        recipient_enc_pub_key: Recipient's ECIES public key (cryptography key object).
-        algorithm: Determines hash for recipient ID (P-256 → SHA-256).
-
-    Returns:
-        COER-encoded EtsiTs103097Data-Encrypted bytes.
+        plaintext: Data to encrypt.
+        recipient_cert_encoded: Encoded recipient certificate (selects the format).
+        recipient_enc_pub_key: The certificate's ECIES public encryption key.
+        algorithm: must be NIST P-256.
+        generation_time_us: v2 only, generation_time header (defaults to now).
     """
-    # Step 1: Generate symmetric key and nonce
-    aes_key = random_bytes(16)  # AES-128 key
-    nonce = random_bytes(12)    # CCM nonce (unique per encryption, NFR-SEC-04)
-
-    # Step 2: AES-128-CCM encrypt
-    ciphertext = aes_ccm_encrypt(aes_key, nonce, plaintext)  # ct || 16-byte tag
-
-    # Step 3: ECIES encrypt AES key
-    ecies_result = ecies_encrypt(recipient_enc_pub_key, aes_key)
-
-    # Step 4: Build EncryptedData structure
-    # recipients: SequenceOfRecipientInfo (exactly one for unicast)
-    recipient_enc = _encode_cert_recip_info(recipient_cert_encoded, algorithm, ecies_result)
-    recipients_enc = encode_octet_string(recipient_enc)  # SequenceOf wrapper
-
-    # ciphertext: SymmetricCiphertext
-    sym_ct = _encode_aes128ccm_ciphertext(nonce, ciphertext)
-
-    # EncryptedData ::= SEQUENCE { recipients, ciphertext }
-    encrypted_data = recipients_enc + sym_ct
-
-    # EtsiTs103097Data content = encryptedData (choice 3)
-    return _make_ieee1609dot2_data(encode_choice(3, encrypted_data))
+    _require_p256(algorithm)
+    if signing.cert_format(recipient_cert_encoded) == 'v2':
+        return _v2_encrypt(plaintext, recipient_cert_encoded, recipient_enc_pub_key,
+                           generation_time_us or now_its_time64())
+    return _v3_encrypt(plaintext, recipient_cert_encoded, recipient_enc_pub_key)
 
 
 def decrypt_data(encrypted_data_bytes: bytes,
@@ -161,63 +178,16 @@ def decrypt_data(encrypted_data_bytes: bytes,
                  my_cert_encoded: bytes,
                  algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256) -> bytes:
     """
-    Decrypt an EtsiTs103097Data-Encrypted structure.
-
-    Args:
-        encrypted_data_bytes: COER-encoded encrypted message.
-        recipient_enc_priv_key: Recipient's ECIES private key.
-        my_cert_encoded: COER-encoded recipient certificate (to match recipient ID).
-        algorithm: Determines hash for recipient ID matching.
-
-    Returns:
-        Decrypted plaintext bytes.
+    Decrypt an encrypted message addressed to my_cert_encoded (v3 EtsiTs103097Data-Encrypted
+    or v2 SecuredMessage). Returns the plaintext: for v3 signed-and-encrypted data this is
+    the inner EtsiTs103097Data-Signed, for v2 the payload of the message. Raises ValueError
+    if the message is malformed, not addressed to this certificate, or fails authentication.
     """
-    offset = 0
+    _require_p256(algorithm)
+    if signing.message_format(encrypted_data_bytes) == 'v2':
+        return _v2_decrypt(encrypted_data_bytes, recipient_enc_priv_key, my_cert_encoded)
+    return _v3_decrypt(encrypted_data_bytes, recipient_enc_priv_key, my_cert_encoded)
 
-    # Parse Ieee1609Dot2Data header
-    version = encrypted_data_bytes[offset]; offset += 1  # 3
-    content_choice = encrypted_data_bytes[offset]; offset += 1  # 3 = encryptedData
-
-    if content_choice != 3:
-        raise ValueError(f"Expected encryptedData (3), got {content_choice}")
-
-    # Parse EncryptedData
-    # recipients: SequenceOfRecipientInfo (length-prefixed)
-    recipients_len_b = encrypted_data_bytes[offset]
-    if recipients_len_b < 0x80:
-        recipients_len = recipients_len_b; offset += 1
-    else:
-        nb = recipients_len_b & 0x7F
-        recipients_len = int.from_bytes(encrypted_data_bytes[offset+1:offset+1+nb], 'big')
-        offset += 1 + nb
-
-    recipients_end = offset + recipients_len
-    recipients_data = encrypted_data_bytes[offset:recipients_end]
-    offset = recipients_end
-
-    # Parse recipients to find matching RecipientInfo
-    my_hash = hash_certificate(my_cert_encoded, algorithm)
-    aes_key = None
-    r_offset = 0
-    while r_offset < len(recipients_data):
-        recip_choice = recipients_data[r_offset]; r_offset += 1
-        if recip_choice == RecipientChoice.CERT_RECIP_INFO:
-            recip_id, v, c, t, r_offset = _decode_ecies_recip_info(recipients_data, r_offset)
-            if recip_id == my_hash:
-                aes_key = ecies_decrypt(recipient_enc_priv_key, v, c, t)
-                break
-
-    if aes_key is None:
-        raise ValueError("No matching recipient found in EncryptedData")
-
-    # Parse SymmetricCiphertext
-    nonce, ciphertext_with_tag, _ = _decode_aes128ccm_ciphertext(encrypted_data_bytes, offset)
-
-    # Decrypt
-    return aes_ccm_decrypt(aes_key, nonce, ciphertext_with_tag)
-
-
-# ── Signed-and-Encrypted ─────────────────────────────────────────────────────
 
 def sign_and_encrypt(payload: bytes,
                      psid: int,
@@ -226,44 +196,61 @@ def sign_and_encrypt(payload: bytes,
                      recipient_cert_encoded: bytes,
                      recipient_enc_pub_key,
                      algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256,
-                     use_digest: bool = True) -> bytes:
+                     use_digest: bool = True,
+                     generation_location: Optional[tuple] = None) -> bytes:
     """
-    Create EtsiTs103097Data-SignedAndEncrypted:
-    An EtsiTs103097Data-Encrypted wrapping an EtsiTs103097Data-Signed.
+    Sign, then encrypt for one recipient.
 
-    Per profile 10.5: sign first, then encrypt the signed structure.
+    v3: EtsiTs103097Data-SignedAndEncrypted-Unicast — an EtsiTs103097Data-Encrypted
+        whose plaintext is an EtsiTs103097Data-Signed.
+    v2: one SecuredMessage with payload type signed_and_encrypted; the signature
+        covers the headers and the ciphertext (TS 103 097 v1.2.1 clause 5.6).
+        The generic profile applies (clause 7.3): the signer is always the
+        certificate, generation_location is required, and CAM/DENM ITS-AIDs are
+        rejected (CAMs/DENMs shall not be encrypted, clauses 7.1/7.2).
+    Signer and recipient certificates must be of the same version.
     """
-    from .signing import sign_data
-    signed = sign_data(
-        payload=payload,
-        psid=psid,
-        signer_priv_key=signer_priv_key,
-        signer_cert_encoded=signer_cert_encoded,
-        algorithm=algorithm,
-        use_digest=use_digest,
-    )
-    return encrypt_data(
-        plaintext=signed,
-        recipient_cert_encoded=recipient_cert_encoded,
-        recipient_enc_pub_key=recipient_enc_pub_key,
-        algorithm=algorithm,
-    )
+    _require_p256(algorithm)
+    signer_fmt = signing.cert_format(signer_cert_encoded)
+    if signer_fmt != signing.cert_format(recipient_cert_encoded):
+        raise ValueError("signer and recipient certificates must both be v2 or both be v3")
+
+    if signer_fmt == 'v3':
+        signed = signing.sign_data(
+            payload=payload, psid=psid, signer_priv_key=signer_priv_key,
+            signer_cert_encoded=signer_cert_encoded, algorithm=algorithm, use_digest=use_digest,
+            generation_location=generation_location)
+        return _v3_encrypt(signed, recipient_cert_encoded, recipient_enc_pub_key)
+
+    signing._v2_generic_profile(psid, generation_location, 'signed_and_encrypted message')
+    extra, aes_key, nonce = _v2_encryption_fields(recipient_cert_encoded, recipient_enc_pub_key)
+    ciphertext = aes_ccm_encrypt(aes_key, nonce, payload)
+    prefix = signing._v2_signing_prefix(
+        signer_cert_encoded, False, psid, now_its_time64(), generation_location, None,
+        signing._V2_PAYLOAD_SIGNED_AND_ENCRYPTED, ciphertext, extra_fields=extra)
+    return signing._v2_sign(prefix, signer_priv_key)
 
 
 def decrypt_and_verify(encrypted_signed_bytes: bytes,
                        recipient_enc_priv_key,
                        my_cert_encoded: bytes,
                        signer_pub_key,
-                       algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256) -> dict:
+                       algorithm: PublicKeyAlgorithm = PublicKeyAlgorithm.ECDSA_NIST_P256,
+                       signer_cert_encoded=None) -> dict:
     """
-    Decrypt an EtsiTs103097Data-SignedAndEncrypted and verify the signature.
-    Returns dict with 'valid', 'payload', and other parsed fields.
+    Decrypt a signed-and-encrypted message and verify its signature.
+    signer_cert_encoded is required when the message is digest-signed.
+    Returns the verify_signed_data() dict with 'payload' set to the plaintext.
     """
-    from .signing import verify_signed_data
-    signed_bytes = decrypt_data(
-        encrypted_data_bytes=encrypted_signed_bytes,
-        recipient_enc_priv_key=recipient_enc_priv_key,
-        my_cert_encoded=my_cert_encoded,
-        algorithm=algorithm,
-    )
-    return verify_signed_data(signed_bytes, signer_pub_key, algorithm)
+    _require_p256(algorithm)
+    if signing.message_format(encrypted_signed_bytes) == 'v3':
+        signed_bytes = _v3_decrypt(encrypted_signed_bytes, recipient_enc_priv_key, my_cert_encoded)
+        return signing.verify_signed_data(signed_bytes, signer_pub_key, algorithm,
+                                          signer_cert_encoded=signer_cert_encoded)
+
+    # v2: the signature covers the ciphertext, so verify first, then decrypt
+    result = signing.verify_signed_data(encrypted_signed_bytes, signer_pub_key, algorithm,
+                                        signer_cert_encoded=signer_cert_encoded)
+    if result.get('valid'):
+        result['payload'] = _v2_decrypt(encrypted_signed_bytes, recipient_enc_priv_key, my_cert_encoded)
+    return result
