@@ -36,7 +36,7 @@ The mechanism is described in [R11], [R21 §1, §3.3] and
 |---|---|---|
 | EA and AA collusion | ❌ | together, the EA (cocoon keys) and the AA (offsets `r`) can link every AT to the request, and so to the EC. The separation is organisational, not cryptographic. |
 | Reuse of a caterpillar key and expansion key across requests | ❌ | the same `(A, k, i, j)` yields the same cocoon keys, so the EA can link the requests. The tool generates fresh caterpillar and expansion keys on every `butterfly-at` run [R5 cl. 6.2.3.5.2]. |
-| Radio or network identifiers (MAC, IP) unchanged across AT changes | ❌ | AT changes must be coordinated with identifier changes in the ITS-S stack. The vnap-secure notes point out that pseudonym rotation alone does not change the GeoNetworking or MAC address. |
+| Radio or network identifiers (MAC, IP) unchanged across AT changes | ❌ | AT changes must be coordinated with identifier changes in the ITS-S stack. The vnap-secure pseudonym rotation patch [R30] (`SECURITY=pseudonyms`, e.g. with a butterfly AT batch) changes only the signing AT; it does not change the GeoNetworking or MAC address. |
 | Correlation through message content (position, timing) | ❌ | application-layer issue |
 | When to change ATs | ❌ | the standards do not fix a change strategy (section 2) |
 | Misbehaviour detection versus unlinkability | — | revocation needs some linkability; this tool implements neither CRLs nor linkage values |
