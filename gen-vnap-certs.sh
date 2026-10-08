@@ -7,7 +7,7 @@ OUTPUT_DIR=${VAR:-"./vnap-certs"}
 PYTHON="uv run python"
 
 # Number of butterfly expansion tickets to generate
-NUM_TICKETS=8
+NUM_TICKETS=24
 
 # Cert directory used by simulation
 TARGET_DIR="/home/demo/COIMBRA/vnap-secure/vnap-certs/c-its-pki"

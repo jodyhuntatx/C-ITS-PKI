@@ -1,0 +1,11 @@
+{
+  "algorithm": 0,
+  "region_ids": null,
+  "etsi_version": 2,
+  "entities": [
+    "root_ca",
+    "tlm",
+    "ea",
+    "aa"
+  ]
+}
