@@ -6,7 +6,7 @@ That's butterfly key expansion.
 
 **Why anyone wants this:** Cars that talk to each other (V2X) shout messages like "I'm braking!" many times a second. Each message needs a signature so others can trust it. If a car used the same key every time, anyone listening could follow it around town. So each car needs lots of different keys that change often, and nobody should be able to link them back to the car.
 
-###How the trick works:
+### How the trick works:
 
 1. **You make one caterpillar.** Your car makes one secret key and shows the world only its public half. It also writes down a secret "recipe," a rule for turning that one key into key #1, key #2, key #3, and so on.
 2. **You give the caterpillar and recipe to a helper.** The helper (the Registration Authority) uses the recipe to make hundreds of public "butterfly" keys from your one caterpillar. It mixes your butterflies in a big bag with butterflies from thousands of other cars.
