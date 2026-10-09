@@ -57,6 +57,21 @@ bash tests/v3/run_all.sh                          # 85 tests (v2 suite: 84)
   - TS 102 941 protocol messages
   - PICS
 
+## Used by vnap-secure
+
+The [vnap-secure](https://github.com/jodyhuntatx/vnap-secure) simulation harness [R30]
+includes this repository as a git submodule (`external/C-ITS-PKI`, pinned to a tested commit):
+
+- **Per-run PKI:** vnap-secure's `vnap-pki` image is built from this repository's `src/`
+  package. It runs the CA hierarchy and issues the butterfly ATs of each simulation run, so
+  `src.pki`, `src.certificates`, `src.crypto` and `src.types` are an interface to vnap-secure.
+- **Fixed certificate set:** `gen-vnap-certs.sh` produces the certificates committed in
+  vnap-secure's `certs/c-its-pki/`.
+
+Changes to that interface or to the certificate encoding must be checked with vnap-secure:
+`tests/test_vnap_secure_interface.py` covers the interface; see
+[Operations Guide §8](operations.md#8-using-the-output-with-vanetza-nap).
+
 ## Repository layout
 
 ```

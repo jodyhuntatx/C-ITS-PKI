@@ -248,7 +248,7 @@ $P sign-cam     --at-key pki/bke-tickets/bke_at_0_sign.key \
 | Script | Purpose | Notes |
 |---|---|---|
 | `gen-verify.sh [v2\|v3]` | End-to-end check of all workflows (init, enrol, AT, butterfly batch, CAM/DENM sign and full-chain verify, encrypt, decrypt) for one or both formats | Deletes and recreates `pki-output/`, `cam.*`, `denm.*` in the repo root. Exit code 0 with every `Overall: VALID` is the pass criterion. |
-| `gen-vnap-certs.sh [any-arg]` | Generates the Vanetza-NAP simulation certificates and copies them into `$TARGET_DIR` | No argument means v3; **any** argument means v2 (the usage text says otherwise). Output directory is `$VAR` (default `./vnap-certs`). `TARGET_DIR` is hardcoded to `/home/demo/COIMBRA/vnap-secure/vnap-certs/c-its-pki`. It stops (`exit`) after copying, so its EC/message steps are not run. |
+| `gen-vnap-certs.sh [any-arg]` | Generates the Vanetza-NAP simulation certificates and copies them into `$TARGET_DIR` | No argument means v3; **any** argument means v2 (the usage text says otherwise). Output directory is `$VAR` (default `./vnap-certs`). `TARGET_DIR` (environment) is vnap-secure's `certs/c-its-pki`; by default the script finds it from vnap-secure's submodule `external/C-ITS-PKI` or from a checkout next to vnap-secure. It stops (`exit`) after copying, so its EC/message steps are not run. |
 | `_clean.sh` | Removes generated files | Deletes `cam.*`, `denm.*`, `*.key` in the repo root, `vnap-certs/`, `src/__pycache__`, and all `.venv` directories. |
 
 `gen-vnap-certs.sh` places these files in the simulation directory: `root_ca.cert`,
@@ -279,28 +279,80 @@ PYTHON="uv run python" bash tests/v3/test_05_signing.sh   # a single file, from 
 
 What each test demonstrates is mapped to requirements in [compliance](compliance.md).
 
-## 8. Using the output with Vanetza-NAP
-
-The tool is validated against Vanetza-NAP [R24] with the vnap-secure harness [R30]. Build
-the patched image `vnap:latest` there with `./docker-build.sh`; see the vnap-secure
-`README.md`. Run the commands below from vnap-secure's `vnap-docker/` directory:
+`tests/test_vnap_secure_interface.py` is a contract test for vnap-secure's per-run PKI (§8.2):
+the `src/` names and keyword arguments it uses, and butterfly key expansion consistency.
 
 ```bash
-# live simulation: RSU (regular AT) and OBU (butterfly AT) exchange signed CAMs
-NATIVE=1 ./run-r2-sim.sh c-its-pki vnap:latest             # v3 files in vnap-certs/c-its-pki
-CERTS_DIR=/path/to/set PKI_SECURITY=certs-v2 NATIVE=1 ./run-r2-sim.sh c-its-pki vnap:latest
-./check-r2-cams.sh 20                                       # expect "N Success" both ways
+uv run --project tests/v3 python -m unittest tests/test_vnap_secure_interface.py
+```
 
-# offline: verify or parse one message file with Vanetza's own security stack
+## 8. Using the output with Vanetza-NAP
+
+The tool is validated against Vanetza-NAP [R24] with the vnap-secure harness [R30], which
+depends on this repository in two ways.
+
+### 8.1 Fixed certificate set (`gen-vnap-certs.sh`)
+
+`gen-vnap-certs.sh` writes a Root CA, TLM, EA, AA, a regular AT and 24 butterfly ATs into
+vnap-secure's `certs/c-its-pki/` (see §6). vnap-secure commits that set; its scenarios
+with fixed certificate pools (`c-its-pki`, `c-its-pki-pseudo`, the tracking, mix-zone, convoy
+and traffic scenarios) use it. Regenerate it before it expires or to produce a v2 set, then
+run one of those scenarios in vnap-secure (`sim/`):
+
+```bash
+./vnapctl up c-its-pki && ./vnapctl check     # RSU (regular AT) and OBU (butterfly AT) exchange signed CAMs
+./vnapctl down
+```
+
+### 8.2 Per-run PKI (`src/` package)
+
+vnap-secure's `vnap-pki` image runs a fresh PKI for each simulation run: it provisions the
+CA hierarchy, enrols the vehicles and issues butterfly ATs in batches while the run lasts.
+The image is built from vnap-secure's `sim/images/pki/` plus this repository's `src/`
+(copied to `/opt/cits-pki/src`). Its `pki_service.py` imports:
+
+| Module | Names |
+|---|---|
+| `src.pki` | `CITSPKI`, `PKIEntity` |
+| `src.certificates` | `issue_butterfly_authorization_tickets` |
+| `src.crypto` | `bke_butterfly_private_key`, `bke_cocoon_private_key`, `bke_cocoon_public_key`, `deserialize_private_key`, `generate_keypair`, `public_key_to_point`, `random_bytes`, `serialize_private_key` |
+| `src.types` | `Certificate`, `CertificateId`, `CertificateType`, `CertIdChoice`, `Duration`, `DurationChoice`, `EtsiVersion`, `IssuerChoice`, `IssuerIdentifier`, `PsidSsp`, `PublicKeyAlgorithm`, `ToBeSignedCertificate`, `ValidityPeriod`, `now_its_time32` |
+
+These names, their signatures and the certificate encoding are an interface to vnap-secure.
+The image installs `cryptography`, `tinyec` and `asn1tools` itself (not from
+`pyproject.toml`), so a new runtime dependency of `src/` must be added to vnap-secure's
+`sim/images/pki/Dockerfile` too.
+
+- **Location:** vnap-secure includes this repository as a git submodule, `external/C-ITS-PKI`,
+  pinned to a tested commit (`git clone --recurse-submodules`, or `git submodule update --init`).
+  `CITS_PKI_DIR` overrides it, e.g. to try a working copy; a checkout next to vnap-secure is used
+  when the submodule is not initialised.
+- **Versions:** the image tag includes a digest of `src/`, so any change here builds a new
+  image on the next run, and the image, the run's PKI container and the run's `run.json` record
+  the C-ITS-PKI commit (`vnap.cits_pki`). vnap-secure moves its submodule to a newer commit only
+  after a `[pki]` scenario and its check pass with it.
+- **Contract test:** `tests/test_vnap_secure_interface.py` checks the names and keyword
+  arguments above and that butterfly private and public key expansion agree; run it before
+  pushing a change to `src/` (see §7).
+- **Checking a change** in `src/` end to end: from vnap-secure's `sim/`, with `CITS_PKI_DIR`
+  pointing at this working copy, run a scenario with its own PKI and its check:
+
+```bash
+./vnapctl up scenarios/templates/pki-refill.toml && ./vnapctl check   # expect pki.running==1, no starved stations
+./vnapctl down
+```
+
+### 8.3 Offline message checks
+
+```bash
+# verify or parse one message file with Vanetza's own security stack
 docker run --rm -v DIR:/w vnap:msgcheck v3 /w/cam.signed /w/at.cert /w/aa.cert /w/root_ca.cert
 docker run --rm -v DIR:/w vnap:msgcheck decode-v3 /w/cam.enc
 ```
 
-`CERTS_DIR` must contain a `c-its-pki/` subdirectory with the files `gen-vnap-certs.sh`
-produces. Alternatively, vnap-secure's `start-vnap.sh` runs the same RSU/OBU pair with
-docker-compose (`EXEC_DIR=~/vnap-run ./start-vnap.sh`). `vnap:msgcheck` is built with
-`vnap-docker/msgcheck/build-msgcheck.sh`. `DIR` and `CERTS_DIR` must be under the real `$HOME`, because snap-confined
-Docker cannot read `/mnt/hgfs` or dot-directories.
+`vnap:msgcheck` is built with vnap-secure's `make msgcheck` (`sim/images/msgcheck/build-msgcheck.sh`). `DIR`
+must be under the real `$HOME`, because snap-confined Docker cannot read `/mnt/hgfs` or
+dot-directories.
 
 ## 9. Troubleshooting
 

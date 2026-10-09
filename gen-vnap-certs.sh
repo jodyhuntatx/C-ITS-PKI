@@ -9,8 +9,16 @@ PYTHON="uv run python"
 # Number of butterfly expansion tickets to generate
 NUM_TICKETS=24
 
-# Cert directory used by simulation
-TARGET_DIR="/home/demo/COIMBRA/vnap-secure/vnap-certs/c-its-pki"
+# Cert directory used by the simulation: vnap-secure's certs/c-its-pki. TARGET_DIR overrides;
+# the default works from vnap-secure's submodule (external/C-ITS-PKI) and from a checkout next
+# to vnap-secure.
+if [[ -z "${TARGET_DIR:-}" ]]; then
+  HERE="$(cd "$(dirname "$0")" && pwd)"
+  for candidate in "$HERE/../../certs/c-its-pki" "$HERE/../vnap-secure/certs/c-its-pki"; do
+    [[ -d "$candidate" ]] && { TARGET_DIR="$(cd "$candidate" && pwd)"; break; }
+  done
+fi
+[[ -d "${TARGET_DIR:-}" ]] || { echo "vnap-secure's certs/c-its-pki not found: set TARGET_DIR" >&2; exit 1; }
 
 # ── PKI project root ──────────────────────────────────────────────────────────
 PKI_ROOT="$(pwd)"
